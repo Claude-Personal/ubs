@@ -28,7 +28,7 @@ chmod +x scripts/build_optimized.sh
 ### 2. 빌드 실행
 환경 정비부터 Android/iOS 빌드까지 자동으로 진행됩니다.
 ```bash
-./scripts/build_optimized.sh
+./scripts/build.sh
 ```
 
 ---
