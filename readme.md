@@ -44,8 +44,7 @@ chmod +x scripts/build.sh
 ```text
 .
 ├── scripts
-│   └── build_optimized.sh  # 최적화 빌드 자동화 스크립트
-└── README.md               # 프로젝트 가이드라인
-```
+    └── build.sh  # 최적화 빌드 자동화 스크립트
+
 
 ---
