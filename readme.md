@@ -45,6 +45,3 @@ chmod +x scripts/build.sh
 .
 ├── scripts
     └── build.sh  # 최적화 빌드 자동화 스크립트
-
-
----
