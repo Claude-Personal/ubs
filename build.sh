@@ -69,6 +69,40 @@ if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
 fi
 
 # ==========================================
+# 플랫폼 선택
+# ==========================================
+
+echo ""
+echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
+echo -e "  ${YELLOW}1) iOS + Android 둘 다${NC}"
+echo -e "  ${YELLOW}2) iOS만${NC}"
+echo -e "  ${YELLOW}3) Android만${NC}"
+read -p "선택 (1-3): " PLATFORM_CHOICE
+
+case $PLATFORM_CHOICE in
+  1)
+    BUILD_IOS=true
+    BUILD_ANDROID=true
+    echo -e "${GREEN}✅ iOS + Android 빌드${NC}"
+    ;;
+  2)
+    BUILD_IOS=true
+    BUILD_ANDROID=false
+    echo -e "${GREEN}✅ iOS만 빌드${NC}"
+    ;;
+  3)
+    BUILD_IOS=false
+    BUILD_ANDROID=true
+    echo -e "${GREEN}✅ Android만 빌드${NC}"
+    ;;
+  *)
+    echo -e "${RED}잘못된 선택입니다. iOS + Android 둘 다 빌드합니다.${NC}"
+    BUILD_IOS=true
+    BUILD_ANDROID=true
+    ;;
+esac
+
+# ==========================================
 # 환경변수 파일 확인 (--dart-define-from-file)
 # ==========================================
 
@@ -99,25 +133,29 @@ flutter pub get
 # echo -e "${BLUE}⚙️ [2/4] Generating Codes (build_runner)...${NC}"
 # dart run build_runner build --delete-conflicting-outputs
 
-echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
-flutter build appbundle --release \
-  $DART_DEFINE \
-  --obfuscate \
-  --split-debug-info=build/app/outputs/symbols \
-  --tree-shake-icons \
-  --no-pub
+if [ "$BUILD_ANDROID" = true ]; then
+  echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
+  flutter build appbundle --release \
+    $DART_DEFINE \
+    --obfuscate \
+    --split-debug-info=build/app/outputs/symbols \
+    --tree-shake-icons \
+    --no-pub
+fi
 
-echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
-# flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
-# Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
-# String.fromEnvironment() 값이 모두 빈 문자열이 되어 흰 화면 버그가 발생함.
-# 반드시 이 스크립트로만 빌드할 것.
-flutter build ipa --release \
-  $DART_DEFINE \
-  --export-options-plist=ios/ExportOptions.plist \
-  --obfuscate \
-  --split-debug-info=build/ios/outputs/symbols \
-  --no-pub
+if [ "$BUILD_IOS" = true ]; then
+  echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
+  # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
+  # Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
+  # String.fromEnvironment() 값이 모두 빈 문자열이 되어 흰 화면 버그가 발생함.
+  # 반드시 이 스크립트로만 빌드할 것.
+  flutter build ipa --release \
+    $DART_DEFINE \
+    --export-options-plist=ios/ExportOptions.plist \
+    --obfuscate \
+    --split-debug-info=build/ios/outputs/symbols \
+    --no-pub
+fi
 
 # ==========================================
 # 빌드 완료 알림 + 폴더 열기
@@ -131,28 +169,40 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
   say "Build process completed successfully"
   osascript -e "display notification \"Version $NEW_VERSION 빌드 완료\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
 
-  if [ -d "$ANDROID_OUT" ]; then
-    open "$ANDROID_OUT"
-  else
-    echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
+  if [ "$BUILD_ANDROID" = true ]; then
+    if [ -d "$ANDROID_OUT" ]; then
+      open "$ANDROID_OUT"
+    else
+      echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
+    fi
   fi
 
-  if [ -d "$IOS_OUT" ]; then
-    open "$IOS_OUT"
-  else
-    echo -e "${RED}⚠️  iOS 출력 폴더를 찾을 수 없습니다: $IOS_OUT${NC}"
+  if [ "$BUILD_IOS" = true ]; then
+    if [ -d "$IOS_OUT" ]; then
+      open "$IOS_OUT"
+    else
+      echo -e "${RED}⚠️  iOS 출력 폴더를 찾을 수 없습니다: $IOS_OUT${NC}"
+    fi
   fi
 
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-  xdg-open "$ANDROID_OUT" 2>/dev/null || true
+  if [ "$BUILD_ANDROID" = true ]; then
+    xdg-open "$ANDROID_OUT" 2>/dev/null || true
+  fi
 
 elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
-  explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
+  if [ "$BUILD_ANDROID" = true ]; then
+    explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
+  fi
 fi
 
 echo -e "------------------------------------------------------------"
-echo -e "${GREEN}✅ ALL BUILDS COMPLETED SUCCESSFULLY!${NC}"
+echo -e "${GREEN}✅ BUILD COMPLETED SUCCESSFULLY!${NC}"
 echo -e "🏷️  Version    : $NEW_VERSION"
-echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
-echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+if [ "$BUILD_ANDROID" = true ]; then
+  echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
+fi
+if [ "$BUILD_IOS" = true ]; then
+  echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+fi
 echo -e "------------------------------------------------------------"
