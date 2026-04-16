@@ -69,6 +69,25 @@ if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
 fi
 
 # ==========================================
+# 환경변수 파일 확인 (--dart-define-from-file)
+# ==========================================
+
+ENV_FILE=".env.prod"
+if [ ! -f "$ENV_FILE" ]; then
+  ENV_FILE=".env"
+fi
+
+if [ ! -f "$ENV_FILE" ]; then
+  echo -e "${RED}❌ 환경변수 파일이 없습니다 (.env.prod 또는 .env)${NC}"
+  echo -e "${YELLOW}  .env.example을 복사해서 값을 채워주세요:${NC}"
+  echo -e "  cp .env.example .env"
+  exit 1
+fi
+
+echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
+DART_DEFINE="--dart-define-from-file=$ENV_FILE"
+
+# ==========================================
 # 빌드 시작
 # ==========================================
 
@@ -82,6 +101,7 @@ flutter pub get
 
 echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
 flutter build appbundle --release \
+  $DART_DEFINE \
   --obfuscate \
   --split-debug-info=build/app/outputs/symbols \
   --tree-shake-icons \
@@ -89,6 +109,7 @@ flutter build appbundle --release \
 
 echo -e "${YELLOW}🍎 [4/4] Building iOS Release Archive...${NC}"
 flutter build ios --release \
+  $DART_DEFINE \
   --obfuscate \
   --split-debug-info=build/ios/outputs/symbols \
   --no-pub || true
