@@ -107,19 +107,24 @@ flutter build appbundle --release \
   --tree-shake-icons \
   --no-pub
 
-echo -e "${YELLOW}🍎 [4/4] Building iOS Release Archive...${NC}"
-flutter build ios --release \
+echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
+# flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
+# Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
+# String.fromEnvironment() 값이 모두 빈 문자열이 되어 흰 화면 버그가 발생함.
+# 반드시 이 스크립트로만 빌드할 것.
+flutter build ipa --release \
   $DART_DEFINE \
+  --export-options-plist=ios/ExportOptions.plist \
   --obfuscate \
   --split-debug-info=build/ios/outputs/symbols \
-  --no-pub || true
+  --no-pub
 
 # ==========================================
 # 빌드 완료 알림 + 폴더 열기
 # ==========================================
 
 ANDROID_OUT="build/app/outputs/bundle/release"
-IOS_OUT="build/ios/iphoneos"
+IOS_OUT="build/ios/ipa"
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
   afplay /System/Library/Sounds/Glass.aiff
@@ -149,5 +154,5 @@ echo -e "------------------------------------------------------------"
 echo -e "${GREEN}✅ ALL BUILDS COMPLETED SUCCESSFULLY!${NC}"
 echo -e "🏷️  Version    : $NEW_VERSION"
 echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
-echo -e "📍 iOS Runner  : $IOS_OUT/Runner.app"
+echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
 echo -e "------------------------------------------------------------"
