@@ -1,10 +1,10 @@
-# 🚀 Flutter Optimization Build Script
+# Flutter Optimization Build Script
 
 Flutter 애플리케이션의 보안 강화, 성능 최적화 및 배포 자동화를 위한 전문적인 빌드 스크립트입니다.
 
 ---
 
-## ⚡ 설치 (Install)
+## 설치 (Install)
 
 Flutter 프로젝트 루트에서 아래 명령어를 실행하세요.
 
@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Flutter-Optimization-Bu
 
 ---
 
-## 📋 사용 방법 (Usage)
+## 사용 방법 (Usage)
 
 ### Step 1. 권한 부여 (최초 1회)
 
@@ -35,7 +35,7 @@ bash scripts/build.sh
 스크립트 실행 시 현재 버전을 자동으로 읽고, 업데이트 방식을 선택할 수 있습니다.
 
 ```
-📦 현재 버전: 1.2.3+4
+현재 버전: 1.2.3+4
 어떤 버전을 올릴까요?
   1) Build Number만 올리기  → 1.2.3+5
   2) Patch 버전 올리기      → 1.2.4+5
@@ -47,7 +47,7 @@ bash scripts/build.sh
 
 ---
 
-## 🛠 주요 최적화 기술 (Optimization Features)
+## 주요 최적화 기술 (Optimization Features)
 
 상용 배포 시 사용자 경험을 극대화하기 위해 다음과 같은 기술이 적용됩니다.
 
@@ -62,7 +62,7 @@ bash scripts/build.sh
 
 ---
 
-## ✅ 빌드 결과 (Output)
+## 빌드 결과 (Output)
 
 빌드 성공 시 아래 경로에 배포용 파일이 생성됩니다.
 
@@ -81,18 +81,18 @@ bash scripts/build.sh
 | **Linux** | 출력 폴더 자동 열기 (`xdg-open`) |
 | **Windows** | 출력 폴더 자동 열기 (Explorer) |
 
-### 📊 실제 빌드 결과 예시
+### 실제 빌드 결과 예시
 
 ```
 ------------------------------------------------------------
-✅ ALL BUILDS COMPLETED SUCCESSFULLY!
-🏷️  Version     : 1.0.1+2
-📍 Android AAB  : build/app/outputs/bundle/release/app-release.aab (47.7MB)
-📍 iOS Runner   : build/ios/iphoneos/Runner.app
+ALL BUILDS COMPLETED SUCCESSFULLY!
+Version     : 1.0.1+2
+Android AAB : build/app/outputs/bundle/release/app-release.aab (47.7MB)
+iOS Runner  : build/ios/iphoneos/Runner.app
 ------------------------------------------------------------
 ```
 
-### 🗜 Tree Shaking 절감 효과
+### Tree Shaking 절감 효과
 
 | 리소스 | 원본 크기 | 최적화 후 | 절감률 |
 | :--- | ---: | ---: | ---: |
@@ -102,12 +102,11 @@ bash scripts/build.sh
 
 ---
 
-## ⚙️ 코드 생성 라이브러리 사용 시 (Freezed / Riverpod 등)
+## 코드 생성 라이브러리 사용 시 (Freezed / Riverpod 등)
 
 `build_runner`로 코드를 생성하는 패키지를 사용하는 경우, `scripts/build.sh` 내 아래 주석을 해제하세요.
 
 ```bash
-# echo -e "${BLUE}⚙️ [2/4] Generating Codes (build_runner)...${NC}"
 # dart run build_runner build --delete-conflicting-outputs
 ```
 
@@ -115,7 +114,7 @@ bash scripts/build.sh
 
 ---
 
-## ⚠️ 주의사항 (Prerequisites)
+## 주의사항 (Prerequisites)
 
 * **Android:** 빌드 전 `android/key.properties` 파일에 사이닝 키 정보가 설정되어 있어야 합니다.
 * **iOS:** Xcode 내에서 유효한 **Development Team** 및 **Bundle ID** 설정이 필수입니다.
@@ -124,7 +123,7 @@ bash scripts/build.sh
 
 ---
 
-## 📂 프로젝트 구조
+## 프로젝트 구조
 
 ```text
 .
