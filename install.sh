@@ -130,6 +130,8 @@ fi
 
 echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
 DART_DEFINE="--dart-define-from-file=$ENV_FILE"
+ANDROID_OUT="build/app/outputs/bundle/release"
+IOS_OUT="build/ios/ipa"
 
 echo -e "${BLUE}🚀 [1/4] Cleaning & Fetching Dependencies...${NC}"
 flutter clean
@@ -143,6 +145,10 @@ if [ "$BUILD_ANDROID" = true ]; then
     --split-debug-info=build/app/outputs/symbols \
     --tree-shake-icons \
     --no-pub
+
+  if [[ "$OSTYPE" == "darwin"* ]] && [ -d "$ANDROID_OUT" ]; then
+    open "$ANDROID_OUT"
+  fi
 fi
 
 if [ "$BUILD_IOS" = true ]; then
@@ -155,14 +161,10 @@ if [ "$BUILD_IOS" = true ]; then
     --no-pub
 fi
 
-ANDROID_OUT="build/app/outputs/bundle/release"
-IOS_OUT="build/ios/ipa"
-
 if [[ "$OSTYPE" == "darwin"* ]]; then
   afplay /System/Library/Sounds/Glass.aiff
   say "Build process completed successfully"
   osascript -e "display notification \"Version $NEW_VERSION 빌드 완료\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
-  [ "$BUILD_ANDROID" = true ] && [ -d "$ANDROID_OUT" ] && open "$ANDROID_OUT"
   [ "$BUILD_IOS" = true ]     && [ -d "$IOS_OUT" ]     && open "$IOS_OUT"
 fi
 
