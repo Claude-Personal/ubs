@@ -120,6 +120,8 @@ fi
 
 echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
 DART_DEFINE="--dart-define-from-file=$ENV_FILE"
+ANDROID_OUT="build/app/outputs/bundle/release"
+IOS_OUT="build/ios/ipa"
 
 # ==========================================
 # 빌드 시작
@@ -141,6 +143,18 @@ if [ "$BUILD_ANDROID" = true ]; then
     --split-debug-info=build/app/outputs/symbols \
     --tree-shake-icons \
     --no-pub
+
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [ -d "$ANDROID_OUT" ]; then
+      open "$ANDROID_OUT"
+    else
+      echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
+    fi
+  elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    xdg-open "$ANDROID_OUT" 2>/dev/null || true
+  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
+    explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
+  fi
 fi
 
 if [ "$BUILD_IOS" = true ]; then
@@ -161,21 +175,10 @@ fi
 # 빌드 완료 알림 + 폴더 열기
 # ==========================================
 
-ANDROID_OUT="build/app/outputs/bundle/release"
-IOS_OUT="build/ios/ipa"
-
 if [[ "$OSTYPE" == "darwin"* ]]; then
   afplay /System/Library/Sounds/Glass.aiff
   say "Build process completed successfully"
   osascript -e "display notification \"Version $NEW_VERSION 빌드 완료\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
-
-  if [ "$BUILD_ANDROID" = true ]; then
-    if [ -d "$ANDROID_OUT" ]; then
-      open "$ANDROID_OUT"
-    else
-      echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
-    fi
-  fi
 
   if [ "$BUILD_IOS" = true ]; then
     if [ -d "$IOS_OUT" ]; then
@@ -183,16 +186,6 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     else
       echo -e "${RED}⚠️  iOS 출력 폴더를 찾을 수 없습니다: $IOS_OUT${NC}"
     fi
-  fi
-
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-  if [ "$BUILD_ANDROID" = true ]; then
-    xdg-open "$ANDROID_OUT" 2>/dev/null || true
-  fi
-
-elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
-  if [ "$BUILD_ANDROID" = true ]; then
-    explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
   fi
 fi
 
