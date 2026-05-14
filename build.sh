@@ -34,7 +34,8 @@ echo -e "  ${YELLOW}2) Patch 버전 올리기${NC}      → $(echo $VERSION_NAME
 echo -e "  ${YELLOW}3) Minor 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')+$((BUILD_NUMBER + 1))"
 echo -e "  ${YELLOW}4) Major 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')+$((BUILD_NUMBER + 1))"
 echo -e "  ${YELLOW}5) 버전 유지${NC}"
-read -p "선택 (1-5): " VERSION_CHOICE
+echo -e "  ${YELLOW}6) 취소${NC}"
+read -p "선택 (1-6): " VERSION_CHOICE
 
 case $VERSION_CHOICE in
   1)
@@ -55,6 +56,10 @@ case $VERSION_CHOICE in
   5)
     NEW_VERSION="$CURRENT_VERSION"
     echo -e "${CYAN}버전 유지: $NEW_VERSION${NC}"
+    ;;
+  6)
+    echo -e "${YELLOW}빌드를 취소했습니다.${NC}"
+    exit 0
     ;;
   *)
     echo -e "${RED}잘못된 선택입니다. 버전을 유지합니다.${NC}"
@@ -77,7 +82,8 @@ echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
 echo -e "  ${YELLOW}1) iOS + Android 둘 다${NC}"
 echo -e "  ${YELLOW}2) iOS만${NC}"
 echo -e "  ${YELLOW}3) Android만${NC}"
-read -p "선택 (1-3): " PLATFORM_CHOICE
+echo -e "  ${YELLOW}4) 취소${NC}"
+read -p "선택 (1-4): " PLATFORM_CHOICE
 
 case $PLATFORM_CHOICE in
   1)
@@ -94,6 +100,10 @@ case $PLATFORM_CHOICE in
     BUILD_IOS=false
     BUILD_ANDROID=true
     echo -e "${GREEN}✅ Android만 빌드${NC}"
+    ;;
+  4)
+    echo -e "${YELLOW}빌드를 취소했습니다.${NC}"
+    exit 0
     ;;
   *)
     echo -e "${RED}잘못된 선택입니다. iOS + Android 둘 다 빌드합니다.${NC}"
