@@ -66,7 +66,7 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Flutter-Optimization-Build-Script/main"
 
 check_script_update() {
@@ -194,6 +194,35 @@ case $PLATFORM_CHOICE in
     ;;
 esac
 
+PARALLEL_BUILD=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARALLEL_PREFS_FILE="$SCRIPT_DIR/.build_prefs"
+
+if [ "$BUILD_IOS" = true ] && [ "$BUILD_ANDROID" = true ]; then
+  if [ -f "$PARALLEL_PREFS_FILE" ]; then
+    source "$PARALLEL_PREFS_FILE"
+    if [ "$PARALLEL_BUILD" = true ]; then
+      echo -e "${CYAN}저장된 설정: 동시 빌드 사용${NC} (변경하려면 ${SCRIPT_DIR}/.build_prefs 삭제)"
+    else
+      echo -e "${CYAN}저장된 설정: 순차 빌드 사용${NC} (변경하려면 ${SCRIPT_DIR}/.build_prefs 삭제)"
+    fi
+  else
+    echo -e "${CYAN}iOS·Android 빌드 방식을 선택하세요.${NC}"
+    echo -e "  ${YELLOW}1) 순차 빌드 (권장)${NC}"
+    echo -e "  ${YELLOW}2) 동시 빌드${NC} (Gradle+Xcode 동시 실행 → 메모리 여유 없으면 오히려 느려질 수 있음)"
+    read -p "선택 (1-2): " PARALLEL_CHOICE
+    if [ "$PARALLEL_CHOICE" = "2" ]; then
+      PARALLEL_BUILD=true
+      echo -e "${GREEN}✅ 동시 빌드로 진행${NC}"
+    else
+      PARALLEL_BUILD=false
+      echo -e "${GREEN}✅ 순차 빌드로 진행${NC}"
+    fi
+    echo "PARALLEL_BUILD=$PARALLEL_BUILD" > "$PARALLEL_PREFS_FILE"
+    echo -e "${CYAN}ℹ️  이 선택은 저장되어 다음부터 자동 적용됩니다. 바꾸려면 ${PARALLEL_PREFS_FILE} 을 삭제하세요.${NC}"
+  fi
+fi
+
 # ==========================================
 # 환경변수 파일 확인 (--dart-define-from-file)
 # ==========================================
@@ -227,7 +256,7 @@ flutter pub get
 # echo -e "${BLUE}⚙️ [2/4] Generating Codes (build_runner)...${NC}"
 # dart run build_runner build --delete-conflicting-outputs
 
-if [ "$BUILD_ANDROID" = true ]; then
+build_android() {
   echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
   flutter build appbundle --release \
     $DART_DEFINE \
@@ -247,9 +276,9 @@ if [ "$BUILD_ANDROID" = true ]; then
   elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
     explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
   fi
-fi
+}
 
-if [ "$BUILD_IOS" = true ]; then
+build_ios() {
   echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
   # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
   # Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
@@ -261,6 +290,25 @@ if [ "$BUILD_IOS" = true ]; then
     --obfuscate \
     --split-debug-info=build/ios/outputs/symbols \
     --no-pub
+}
+
+if [ "$PARALLEL_BUILD" = true ]; then
+  echo -e "${BLUE}⏱️  Android·iOS 동시 빌드 시작 (로그가 섞여 보일 수 있음)${NC}"
+  build_android &
+  ANDROID_PID=$!
+  build_ios &
+  IOS_PID=$!
+
+  wait "$ANDROID_PID"; ANDROID_STATUS=$?
+  wait "$IOS_PID"; IOS_STATUS=$?
+
+  if [ "$ANDROID_STATUS" -ne 0 ] || [ "$IOS_STATUS" -ne 0 ]; then
+    echo -e "${RED}❌ 동시 빌드 실패 (Android: $ANDROID_STATUS, iOS: $IOS_STATUS)${NC}"
+    exit 1
+  fi
+else
+  [ "$BUILD_ANDROID" = true ] && build_android
+  [ "$BUILD_IOS" = true ] && build_ios
 fi
 
 # ==========================================
