@@ -20,7 +20,7 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Flutter-Optimization-Build-Script/main"
 
 check_script_update() {
@@ -202,6 +202,8 @@ IOS_OUT="build/ios/ipa"
 # 빌드 시작
 # ==========================================
 
+BUILD_START_TS=$(date +%s)
+
 echo -e "${BLUE}🚀 [1/4] Cleaning & Fetching Dependencies...${NC}"
 flutter clean
 flutter pub get
@@ -269,10 +271,16 @@ fi
 # 빌드 완료 알림 + 폴더 열기
 # ==========================================
 
+BUILD_END_TS=$(date +%s)
+BUILD_ELAPSED=$((BUILD_END_TS - BUILD_START_TS))
+BUILD_ELAPSED_MIN=$((BUILD_ELAPSED / 60))
+BUILD_ELAPSED_SEC=$((BUILD_ELAPSED % 60))
+BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
+
 if [[ "$OSTYPE" == "darwin"* ]]; then
   afplay /System/Library/Sounds/Glass.aiff
   say "Build process completed successfully"
-  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
+  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
 
   if [ "$BUILD_IOS" = true ]; then
     if [ -d "$IOS_OUT" ]; then
@@ -292,4 +300,5 @@ fi
 if [ "$BUILD_IOS" = true ]; then
   echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
 fi
+echo -e "⏱️  빌드 시간   : $BUILD_ELAPSED_FMT ($([ "$PARALLEL_BUILD" = true ] && echo 동시 || echo 순차) 빌드)"
 echo -e "------------------------------------------------------------"
