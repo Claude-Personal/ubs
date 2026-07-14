@@ -54,6 +54,7 @@ cat > scripts/build.sh << 'BUILDSCRIPT'
 
 set -e
 
+# 색상 정의
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
@@ -61,11 +62,52 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# ==========================================
+# 빌드 스크립트 자체 업데이트 확인
+# ==========================================
+
+SCRIPT_VERSION="1.1.0"
+REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Flutter-Optimization-Build-Script/main"
+
+check_script_update() {
+  local remote_version
+  remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/VERSION" 2>/dev/null | tr -d '[:space:]')
+  [ -z "$remote_version" ] && return
+
+  local latest
+  latest=$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$remote_version" | sort -V | tail -1)
+  [ "$latest" != "$remote_version" ] && return
+  [ "$remote_version" = "$SCRIPT_VERSION" ] && return
+
+  echo -e "${YELLOW}🔔 새 버전의 빌드 스크립트가 있습니다: ${SCRIPT_VERSION} → ${remote_version}${NC}"
+  read -p "지금 업데이트할까요? (Y/n): " DO_UPDATE
+  if [[ "$DO_UPDATE" =~ ^[Nn]$ ]]; then
+    return
+  fi
+
+  if curl -fsSL --max-time 5 "$REPO_RAW/build.sh" -o "$0.new"; then
+    chmod +x "$0.new"
+    mv "$0.new" "$0"
+    echo -e "${GREEN}✅ 업데이트 완료 (${remote_version}). 스크립트를 다시 실행합니다...${NC}"
+    exec "$0" "$@"
+  else
+    echo -e "${RED}⚠️  업데이트 다운로드 실패, 기존 버전(${SCRIPT_VERSION})으로 계속합니다.${NC}"
+    rm -f "$0.new"
+  fi
+}
+
+check_script_update "$@"
+
+# ==========================================
+# 버전 자동 업데이트 (앱 버전)
+# ==========================================
+
 PUBSPEC="pubspec.yaml"
 
+# 현재 버전 읽기 (예: 1.0.0+1)
 CURRENT_VERSION=$(grep '^version:' $PUBSPEC | sed 's/version: //' | tr -d '[:space:]')
-VERSION_NAME=$(echo $CURRENT_VERSION | cut -d'+' -f1)
-BUILD_NUMBER=$(echo $CURRENT_VERSION | cut -d'+' -f2)
+VERSION_NAME=$(echo $CURRENT_VERSION | cut -d'+' -f1)  # 1.0.0
+BUILD_NUMBER=$(echo $CURRENT_VERSION | cut -d'+' -f2)  # 1
 
 echo -e "${CYAN}📦 현재 버전: $CURRENT_VERSION${NC}"
 echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
@@ -78,7 +120,9 @@ echo -e "  ${YELLOW}6) 취소${NC}"
 read -p "선택 (1-6): " VERSION_CHOICE
 
 case $VERSION_CHOICE in
-  1) NEW_VERSION="$VERSION_NAME+$((BUILD_NUMBER + 1))" ;;
+  1)
+    NEW_VERSION="$VERSION_NAME+$((BUILD_NUMBER + 1))"
+    ;;
   2)
     NEW_PATCH=$(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')
     NEW_VERSION="$NEW_PATCH+$((BUILD_NUMBER + 1))"
@@ -105,10 +149,15 @@ case $VERSION_CHOICE in
     ;;
 esac
 
+# pubspec.yaml 버전 교체
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
   sed -i '' "s/^version: .*/version: $NEW_VERSION/" $PUBSPEC
   echo -e "${GREEN}✅ 버전 업데이트: $CURRENT_VERSION → $NEW_VERSION${NC}"
 fi
+
+# ==========================================
+# 플랫폼 선택
+# ==========================================
 
 echo ""
 echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
@@ -119,22 +168,45 @@ echo -e "  ${YELLOW}4) 취소${NC}"
 read -p "선택 (1-4): " PLATFORM_CHOICE
 
 case $PLATFORM_CHOICE in
-  1) BUILD_IOS=true;  BUILD_ANDROID=true  ;;
-  2) BUILD_IOS=true;  BUILD_ANDROID=false ;;
-  3) BUILD_IOS=false; BUILD_ANDROID=true  ;;
+  1)
+    BUILD_IOS=true
+    BUILD_ANDROID=true
+    echo -e "${GREEN}✅ iOS + Android 빌드${NC}"
+    ;;
+  2)
+    BUILD_IOS=true
+    BUILD_ANDROID=false
+    echo -e "${GREEN}✅ iOS만 빌드${NC}"
+    ;;
+  3)
+    BUILD_IOS=false
+    BUILD_ANDROID=true
+    echo -e "${GREEN}✅ Android만 빌드${NC}"
+    ;;
   4)
     echo -e "${YELLOW}빌드를 취소했습니다.${NC}"
     exit 0
     ;;
-  *) BUILD_IOS=true;  BUILD_ANDROID=true  ;;
+  *)
+    echo -e "${RED}잘못된 선택입니다. iOS + Android 둘 다 빌드합니다.${NC}"
+    BUILD_IOS=true
+    BUILD_ANDROID=true
+    ;;
 esac
 
+# ==========================================
+# 환경변수 파일 확인 (--dart-define-from-file)
+# ==========================================
+
 ENV_FILE=".env.prod"
-if [ ! -f "$ENV_FILE" ]; then ENV_FILE=".env"; fi
+if [ ! -f "$ENV_FILE" ]; then
+  ENV_FILE=".env"
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
   echo -e "${RED}❌ 환경변수 파일이 없습니다 (.env.prod 또는 .env)${NC}"
-  echo -e "${YELLOW}  cp .env.example .env${NC}"
+  echo -e "${YELLOW}  .env.example을 복사해서 값을 채워주세요:${NC}"
+  echo -e "  cp .env.example .env"
   exit 1
 fi
 
@@ -143,9 +215,17 @@ DART_DEFINE="--dart-define-from-file=$ENV_FILE"
 ANDROID_OUT="build/app/outputs/bundle/release"
 IOS_OUT="build/ios/ipa"
 
+# ==========================================
+# 빌드 시작
+# ==========================================
+
 echo -e "${BLUE}🚀 [1/4] Cleaning & Fetching Dependencies...${NC}"
 flutter clean
 flutter pub get
+
+# 코드 생성 라이브러리(Freezed, Riverpod 등) 사용 시 주석 해제
+# echo -e "${BLUE}⚙️ [2/4] Generating Codes (build_runner)...${NC}"
+# dart run build_runner build --delete-conflicting-outputs
 
 if [ "$BUILD_ANDROID" = true ]; then
   echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
@@ -156,13 +236,25 @@ if [ "$BUILD_ANDROID" = true ]; then
     --tree-shake-icons \
     --no-pub
 
-  if [[ "$OSTYPE" == "darwin"* ]] && [ -d "$ANDROID_OUT" ]; then
-    open "$ANDROID_OUT"
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [ -d "$ANDROID_OUT" ]; then
+      open "$ANDROID_OUT"
+    else
+      echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
+    fi
+  elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    xdg-open "$ANDROID_OUT" 2>/dev/null || true
+  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
+    explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
   fi
 fi
 
 if [ "$BUILD_IOS" = true ]; then
   echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
+  # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
+  # Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
+  # String.fromEnvironment() 값이 모두 빈 문자열이 되어 흰 화면 버그가 발생함.
+  # 반드시 이 스크립트로만 빌드할 것.
   flutter build ipa --release \
     $DART_DEFINE \
     --export-options-plist=ios/ExportOptions.plist \
@@ -171,19 +263,35 @@ if [ "$BUILD_IOS" = true ]; then
     --no-pub
 fi
 
+# ==========================================
+# 빌드 완료 알림 + 폴더 열기
+# ==========================================
+
 if [[ "$OSTYPE" == "darwin"* ]]; then
   afplay /System/Library/Sounds/Glass.aiff
   say "Build process completed successfully"
   osascript -e "display notification \"Version $NEW_VERSION 빌드 완료\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
-  [ "$BUILD_IOS" = true ]     && [ -d "$IOS_OUT" ]     && open "$IOS_OUT"
+
+  if [ "$BUILD_IOS" = true ]; then
+    if [ -d "$IOS_OUT" ]; then
+      open "$IOS_OUT"
+    else
+      echo -e "${RED}⚠️  iOS 출력 폴더를 찾을 수 없습니다: $IOS_OUT${NC}"
+    fi
+  fi
 fi
 
 echo -e "------------------------------------------------------------"
 echo -e "${GREEN}✅ BUILD COMPLETED SUCCESSFULLY!${NC}"
 echo -e "🏷️  Version    : $NEW_VERSION"
-[ "$BUILD_ANDROID" = true ] && echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
-[ "$BUILD_IOS" = true ]     && echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+if [ "$BUILD_ANDROID" = true ]; then
+  echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
+fi
+if [ "$BUILD_IOS" = true ]; then
+  echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+fi
 echo -e "------------------------------------------------------------"
+
 BUILDSCRIPT
 
   chmod +x scripts/build.sh
