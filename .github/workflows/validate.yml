@@ -39,6 +39,21 @@ jobs:
           scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
           diff -u scripts/update-manifest.txt /tmp/update-manifest.txt
 
+      - name: Validate Flutter export template
+        run: python -c 'import plistlib; plistlib.load(open("templates/flutter/ExportOptions.plist", "rb"))'
+
+      - name: Validate privacy ignores
+        run: |
+          for path in \
+            .env .env.macos signing/App.provisionprofile signing/app.entitlements \
+            build/app.aab dist/app.js src-tauri/target/release/app; do
+            git check-ignore -q "$path"
+          done
+          if git check-ignore -q .env.example || git check-ignore -q .env.macos.example; then
+            echo "Environment example files must remain trackable" >&2
+            exit 1
+          fi
+
       - name: Validate AI skill metadata
         run: |
           python -m pip install --disable-pip-version-check PyYAML

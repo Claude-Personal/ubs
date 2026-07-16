@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- app-store: TestFlight 및 App Store 배포용 -->
+    <!-- Generic App Store Connect export template. Copy into a Flutter app's ios/. -->
     <key>method</key>
     <string>app-store</string>
     <key>uploadSymbols</key>

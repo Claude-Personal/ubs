@@ -25,10 +25,10 @@ Find the nearest workspace directory containing both `build.sh` and `scripts/lib
 3. Run a real build only when the user requested a build or release. Keep versions unchanged unless the user explicitly requested a bump:
 
    ```bash
-   UBS_NO_NOTIFY=true ./build.sh --version-bump none .
+   UBS_NO_NOTIFY=true ./build.sh --version-bump none --report-json .ubs/build-report.json .
    ```
 
-4. Report successes, failures, and artifact paths. Preserve full failing command output when diagnosing.
+4. Read the generated build report and report successes, failures, and artifact paths. Preserve full failing command output when diagnosing.
 
 Do not silently add signing, publishing, notarization, upload, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
 
@@ -39,9 +39,10 @@ Keep updates separate from builds. Never update merely because the user requeste
 ```bash
 ./build.sh update --check
 ./build.sh update --dry-run
+./build.sh update --check --json
 ```
 
-Summarize the local and remote versions, changed managed files, and backup behavior. Run `./build.sh update` only after explicit user authorization. Do not override project source, environment files, signing material, or templates. Report the `.ubs/backups/` path after a successful update.
+Summarize the local and remote versions, changed managed files, and backup behavior. Run `./build.sh update` only after explicit user authorization. Do not override project source, environment files, signing material, or a project's generated `ios/ExportOptions.plist`. Report the `.ubs/backups/` path after a successful update. Prune backups only when the user requests a retention policy, for example `./build.sh update --prune-backups 30`.
 
 ## Select Outputs
 
@@ -81,6 +82,6 @@ Expose the existing commands through a thin MCP server instead of duplicating lo
 - `detect_projects(root)` → `./build.sh detect --json ROOT`
 - `audit_build(root)` → `./build.sh audit --json ROOT`
 - `plan_build(root, options)` → `./build.sh plan --json ... ROOT`
-- `run_build(root, options)` → `./build.sh ... ROOT`
+- `run_build(root, options)` → `./build.sh --report-json REPORT ... ROOT`
 
 Keep `run_build` visibly mutating and require explicit user intent. Validate option values, restrict `root` to allowed workspaces, stream stderr separately, return process exit codes, and apply execution timeouts. Do not expose arbitrary shell fragments as MCP arguments.

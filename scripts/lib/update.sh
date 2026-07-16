@@ -8,11 +8,11 @@ UBS_UPDATE_DEFAULT_BASE_URL="https://raw.githubusercontent.com/kimdzhekhon/Unive
 ubs_update_allowed_path() {
   case "$1" in
     VERSION|build.sh|install.sh|scripts/FLUTTER_VERSION|scripts/TAURI_VERSION|\
-    scripts/build-flutter.sh|scripts/build-tauri-macos.sh|scripts/build-gradle.sh|\
+    scripts/build-flutter.sh|scripts/build-tauri.sh|scripts/build-tauri-macos.sh|scripts/build-gradle.sh|\
     scripts/build-node.sh|scripts/lib/detect.sh|scripts/lib/audit.sh|\
     scripts/lib/node-package-manager.sh|scripts/lib/update.sh|\
     skills/universal-build/SKILL.md|skills/universal-build/agents/openai.yaml|\
-    skills/universal-build/references/optimization.md) return 0 ;;
+    skills/universal-build/references/optimization.md|templates/flutter/ExportOptions.plist) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -25,6 +25,7 @@ install.sh
 scripts/FLUTTER_VERSION
 scripts/TAURI_VERSION
 scripts/build-flutter.sh
+scripts/build-tauri.sh
 scripts/build-tauri-macos.sh
 scripts/build-gradle.sh
 scripts/build-node.sh
@@ -35,7 +36,31 @@ scripts/lib/update.sh
 skills/universal-build/SKILL.md
 skills/universal-build/agents/openai.yaml
 skills/universal-build/references/optimization.md
+templates/flutter/ExportOptions.plist
 EOF
+}
+
+ubs_update_prune_backups() {
+  local root="$1" days="$2" json="${3:-false}" backups
+  local count=0 backup_path
+  backups="$root/.ubs/backups"
+  printf '%s' "$days" | grep -Eqs '^[0-9]+$' || { echo "보존 일수는 0 이상의 정수여야 합니다: $days" >&2; return 2; }
+  if [ -L "$root/.ubs" ] || [ -L "$backups" ]; then
+    echo "심볼릭 링크 백업 경로는 정리하지 않습니다: $backups" >&2
+    return 1
+  fi
+  if [ -d "$backups" ]; then
+    while IFS= read -r backup_path; do
+      [ -n "$backup_path" ] || continue
+      rm -rf "$backup_path"
+      count=$((count + 1))
+    done < <(find "$backups" -mindepth 1 -maxdepth 1 -type d -mtime "+$days" -print)
+  fi
+  if [ "$json" = true ]; then
+    printf '{"ok":true,"mode":"prune-backups","retention_days":%s,"deleted":%s}\n' "$days" "$count"
+  else
+    echo "백업 정리 완료: ${days}일 초과 디렉터리 ${count}개 삭제"
+  fi
 }
 
 ubs_update_sha256() {
@@ -144,6 +169,14 @@ ubs_run_update() {
     echo "업데이트 manifest를 가져오지 못했습니다: $manifest_url" >&2
     rm -rf "$temp_dir"
     return 1
+  fi
+  if [ -n "${UBS_UPDATE_MANIFEST_SHA256:-}" ]; then
+    actual="$(ubs_update_sha256 "$manifest")" || { rm -rf "$temp_dir"; return 1; }
+    if [ "$actual" != "$UBS_UPDATE_MANIFEST_SHA256" ]; then
+      echo "고정한 manifest SHA-256과 일치하지 않습니다." >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
   fi
 
   while IFS=' ' read -r kind value relative extra; do

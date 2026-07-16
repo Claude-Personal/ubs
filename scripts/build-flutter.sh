@@ -331,6 +331,15 @@ build_apk() {
 }
 
 build_ios() {
+  local export_options="${UBS_IOS_EXPORT_OPTIONS:-ios/ExportOptions.plist}"
+  if [ ! -f "$export_options" ] && [ -f "${UBS_RUNTIME_ROOT:-}/templates/flutter/ExportOptions.plist" ]; then
+    export_options="${UBS_RUNTIME_ROOT}/templates/flutter/ExportOptions.plist"
+    echo -e "${CYAN}ℹ️  앱 전용 ExportOptions가 없어 UBS 일반 App Store 템플릿을 사용합니다.${NC}"
+  fi
+  [ -f "$export_options" ] || {
+    echo -e "${RED}❌ iOS 내보내기 설정을 찾을 수 없습니다: $export_options${NC}" >&2
+    return 1
+  }
   echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
   # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
   # Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
@@ -338,7 +347,7 @@ build_ios() {
   # 반드시 이 스크립트로만 빌드할 것.
   flutter build ipa --release \
     $DART_DEFINE \
-    --export-options-plist=ios/ExportOptions.plist \
+    --export-options-plist="$export_options" \
     --obfuscate \
     --split-debug-info=build/ios/outputs/symbols \
     --no-pub

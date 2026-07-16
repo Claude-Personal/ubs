@@ -50,9 +50,10 @@ Universal Build Script
   ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
   ./build.sh plan [경로]             읽기 전용 빌드 계획
   ./build.sh plan --json [경로]      AI/MCP용 빌드 계획 JSON
-  ./build.sh update --check          전체 런타임 업데이트 확인
+  ./build.sh update --check [--json] 전체 런타임 업데이트 확인
   ./build.sh update --dry-run        변경 파일 미리 보기
   ./build.sh update                  검증·백업 후 안전 업데이트
+  ./build.sh update --prune-backups 30  30일 지난 업데이트 백업 삭제
   ./build.sh --dry-run               실행할 빌드만 미리 확인
   ./build.sh --interactive           버전과 플랫폼을 직접 선택
   ./build.sh build --project <경로>  지정 프로젝트 빌드
@@ -64,6 +65,7 @@ Universal Build Script
   --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
   --fail-fast
+  --report-json <파일>               실제 빌드 결과 JSON 저장
 
 지원 타입:
   tauri, flutter, android, kotlin-multiplatform, kotlin, gradle,
@@ -86,7 +88,7 @@ fi
 
 adapter_for() {
   case "$1" in
-    tauri) echo "$SCRIPT_DIR/scripts/build-tauri-macos.sh" ;;
+    tauri) echo "$SCRIPT_DIR/scripts/build-tauri.sh" ;;
     flutter) echo "$SCRIPT_DIR/scripts/build-flutter.sh" ;;
     android|kotlin-multiplatform|kotlin|gradle) echo "$SCRIPT_DIR/scripts/build-gradle.sh" ;;
     react|next|node) echo "$SCRIPT_DIR/scripts/build-node.sh" ;;
@@ -272,6 +274,53 @@ print()
 '
 }
 
+append_build_report() {
+  local report="$1" type="$2" project_dir="$3" status="$4" dry_run="$5"
+  mkdir -p "$(dirname "$report")"
+  python3 - "$report" "$type" "$project_dir" "$status" "$dry_run" <<'PY'
+import datetime, glob, json, os, sys
+
+report, kind, project, status, dry_run = sys.argv[1:]
+patterns = {
+    "flutter": ["build/app/outputs/bundle/release/*.aab", "build/app/outputs/flutter-apk/*.apk", "build/ios/ipa/*.ipa", "build/web"],
+    "tauri": ["src-tauri/target/release/bundle/*/*", "signing/build/*.pkg"],
+    "android": ["**/build/outputs/**/*.aab", "**/build/outputs/**/*.apk"],
+    "kotlin-multiplatform": ["**/build/libs/*.jar", "**/build/bin/**/*"],
+    "kotlin": ["**/build/libs/*.jar"],
+    "gradle": ["**/build/libs/*"],
+    "react": ["dist", "build"],
+    "next": [".next"],
+    "node": ["dist", "build"],
+}
+artifacts = set()
+directory_patterns = {"build/web", "dist", "build", ".next", "src-tauri/target/release/bundle/*/*"}
+for pattern in patterns.get(kind, []):
+    for path in glob.glob(os.path.join(project, pattern), recursive=True):
+        if os.path.isfile(path):
+            artifacts.add(os.path.abspath(path))
+        elif os.path.isdir(path) and pattern in directory_patterns:
+            artifacts.add(os.path.abspath(path))
+try:
+    with open(report, encoding="utf-8") as fh:
+        data = json.load(fh)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {"schema_version": 1, "results": []}
+data["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+data["results"].append({
+    "type": kind,
+    "project": os.path.abspath(project),
+    "status": "planned" if dry_run == "true" else ("success" if status == "0" else "failed"),
+    "exit_code": int(status),
+    "artifacts": sorted(artifacts) if status == "0" and dry_run != "true" else [],
+})
+temporary = report + ".tmp"
+with open(temporary, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, ensure_ascii=False, indent=2)
+    fh.write("\n")
+os.replace(temporary, report)
+PY
+}
+
 run_project() {
   local type="$1"
   local project_dir="$2"
@@ -293,9 +342,11 @@ run_project() {
     if [ "$type" = "flutter" ]; then
       echo "  Flutter outputs=$FLUTTER_OUTPUTS platform=$FLUTTER_PLATFORM version-bump=$VERSION_BUMP"
     fi
+    [ -z "$REPORT_JSON" ] || append_build_report "$REPORT_JSON" "$type" "$project_dir" 0 true
     return 0
   fi
 
+  local build_status=0
   (
     cd "$project_dir"
     UBS_PROJECT_TYPE="$type" \
@@ -304,8 +355,11 @@ run_project() {
     UBS_FLUTTER_PLATFORM="$FLUTTER_PLATFORM" \
     UBS_FLUTTER_OUTPUTS="$FLUTTER_OUTPUTS" \
     UBS_SKIP_CLEAN="$SKIP_CLEAN" \
+    UBS_RUNTIME_ROOT="$SCRIPT_DIR" \
     bash "$adapter"
-  )
+  ) || build_status=$?
+  [ -z "$REPORT_JSON" ] || append_build_report "$REPORT_JSON" "$type" "$project_dir" "$build_status" false
+  return "$build_status"
 }
 
 ROOT="$PWD"
@@ -319,14 +373,22 @@ FLUTTER_PLATFORM="${UBS_FLUTTER_PLATFORM:-auto}"
 SKIP_CLEAN="${UBS_SKIP_CLEAN:-true}"
 FAIL_FAST=false
 JSON_OUTPUT=false
+REPORT_JSON=""
 FLUTTER_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
 UPDATE_CHECK=false
+UPDATE_PRUNE_DAYS=""
 
 while [ $# -gt 0 ]; do
   if [ "$COMMAND" = "update" ]; then
     case "$1" in
       --check) UPDATE_CHECK=true ;;
       --dry-run) DRY_RUN=true ;;
+      --json) JSON_OUTPUT=true ;;
+      --prune-backups)
+        [ $# -ge 2 ] || { echo "--prune-backups 일수가 필요합니다." >&2; exit 2; }
+        UPDATE_PRUNE_DAYS="$2"
+        shift
+        ;;
       -h|--help) usage; exit 0 ;;
       *) echo "update에서 지원하지 않는 옵션 또는 인자입니다: $1" >&2; exit 2 ;;
     esac
@@ -337,6 +399,11 @@ while [ $# -gt 0 ]; do
     --all) BUILD_ALL=true ;;
     --dry-run) DRY_RUN=true ;;
     --json) JSON_OUTPUT=true ;;
+    --report-json)
+      [ $# -ge 2 ] || { echo "--report-json 파일 경로가 필요합니다." >&2; exit 2; }
+      REPORT_JSON="$2"
+      shift
+      ;;
     --non-interactive) NON_INTERACTIVE=true ;;
     --interactive) NON_INTERACTIVE=false ;;
     --skip-clean) SKIP_CLEAN=true ;;
@@ -374,11 +441,36 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+if [ -n "$REPORT_JSON" ]; then
+  case "$REPORT_JSON" in /*) ;; *) REPORT_JSON="$PWD/$REPORT_JSON" ;; esac
+  command -v python3 >/dev/null 2>&1 || { echo "--report-json에는 python3가 필요합니다." >&2; exit 1; }
+  mkdir -p "$(dirname "$REPORT_JSON")"
+  printf '{"schema_version":1,"results":[]}\n' > "$REPORT_JSON"
+fi
+
 if [ "$COMMAND" = "update" ]; then
   UPDATE_LIB="$SCRIPT_DIR/scripts/lib/update.sh"
   [ -f "$UPDATE_LIB" ] || { echo "업데이트 모듈을 찾을 수 없습니다: $UPDATE_LIB" >&2; exit 1; }
   # shellcheck source=scripts/lib/update.sh
   source "$UPDATE_LIB"
+  if [ -n "$UPDATE_PRUNE_DAYS" ]; then
+    [ "$UPDATE_CHECK" = false ] && [ "$DRY_RUN" = false ] || {
+      echo "--prune-backups는 --check/--dry-run과 함께 사용할 수 없습니다." >&2
+      exit 2
+    }
+    ubs_update_prune_backups "$SCRIPT_DIR" "$UPDATE_PRUNE_DAYS" "$JSON_OUTPUT"
+    exit $?
+  fi
+  if [ "$JSON_OUTPUT" = true ]; then
+    command -v python3 >/dev/null 2>&1 || { echo "update --json에는 python3가 필요합니다." >&2; exit 1; }
+    set +e
+    UPDATE_OUTPUT="$(ubs_run_update "$SCRIPT_DIR" "$UPDATE_CHECK" "$DRY_RUN")"
+    UPDATE_STATUS=$?
+    set -e
+    UBS_UPDATE_JSON_STATUS="$UPDATE_STATUS" UBS_UPDATE_JSON_MODE="$([ "$UPDATE_CHECK" = true ] && echo check || { [ "$DRY_RUN" = true ] && echo dry-run || echo apply; })" \
+      python3 -c 'import json, os, sys; print(json.dumps({"ok": os.environ["UBS_UPDATE_JSON_STATUS"] == "0", "status": int(os.environ["UBS_UPDATE_JSON_STATUS"]), "mode": os.environ["UBS_UPDATE_JSON_MODE"], "output": sys.stdin.read().splitlines()}, ensure_ascii=False, indent=2))' <<< "$UPDATE_OUTPUT"
+    exit "$UPDATE_STATUS"
+  fi
   ubs_run_update "$SCRIPT_DIR" "$UPDATE_CHECK" "$DRY_RUN"
   exit $?
 fi

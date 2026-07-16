@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # =================================================================
-# Tauri macOS Production Build Script
-# Description: Automated Build + Codesign + Installer Package for
-#              Tauri 2.0 macOS apps (App Store / notarized distribution)
-# Features: Auto Version Bump, Codesign, productbuild .pkg, Smart Notifications
+# Tauri cross-platform production build script (plus macOS signing/package)
+# Description: Tauri 2 production bundles on Windows/macOS/Linux, with
+#              optional macOS App Store codesign and installer packaging.
+# Features: Auto Version Bump, cross-platform bundle discovery, macOS .pkg
 # Warning: 90886 재발 시 entitlements에 application-identifier를 수동 주입하지 말고 Apple Developer Forums / Tauri 이슈를 확인하세요.
 # =================================================================
 
@@ -68,10 +68,7 @@ if [ ! -f "$CONF" ]; then
   exit 1
 fi
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo -e "${RED}❌ 현재 Tauri 어댑터는 macOS 서명 및 .pkg 빌드 전용입니다.${NC}" >&2
-  exit 1
-fi
+HOST_OS="$(uname -s)"
 
 command -v python3 >/dev/null 2>&1 || { echo -e "${RED}❌ python3 이 필요합니다.${NC}"; exit 1; }
 
@@ -190,11 +187,17 @@ SIGNING_READY=true
 
 case "$PACKAGE_MODE" in
   auto)
-    if [ "$SIGNING_READY" = true ]; then SIGN_PACKAGE=true
+    if [ "$HOST_OS" != "Darwin" ]; then
+      echo -e "${CYAN}ℹ️  ${HOST_OS}에서는 Tauri 기본 번들을 생성합니다. Apple .pkg 서명은 macOS 전용입니다.${NC}"
+    elif [ "$SIGNING_READY" = true ]; then SIGN_PACKAGE=true
     else echo -e "${YELLOW}ℹ️  Apple 서명 설정이 불완전하여 기본 Tauri .app 빌드만 생성합니다.${NC}"
     fi
     ;;
   signed)
+    if [ "$HOST_OS" != "Darwin" ]; then
+      echo -e "${RED}❌ signed 모드의 Apple .pkg 생성은 macOS에서만 지원합니다.${NC}" >&2
+      exit 1
+    fi
     if [ "$SIGNING_READY" != true ]; then
       echo -e "${RED}❌ signed 모드에는 서명 identity, provisioning profile, entitlements가 모두 필요합니다.${NC}" >&2
       exit 1
@@ -267,15 +270,16 @@ else
   echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true ./build.sh${NC}"
 fi
 
-BUNDLE_APP="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
-if [ ! -d "$BUNDLE_APP" ]; then
-  echo -e "${RED}❌ 빌드 결과 .app 을 찾을 수 없습니다: $BUNDLE_APP${NC}"
-  exit 1
+if [ "$HOST_OS" = "Darwin" ]; then
+  BUNDLE_APP="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
+  [ -d "$BUNDLE_APP" ] || { echo -e "${RED}❌ 빌드 결과 .app 을 찾을 수 없습니다: $BUNDLE_APP${NC}"; exit 1; }
+  ARTIFACT_OUT="$BUNDLE_APP"
+else
+  ARTIFACT_OUT="$(find src-tauri/target/release/bundle -mindepth 2 -maxdepth 3 \( -type f -o -type d \) 2>/dev/null | head -1)"
+  [ -n "$ARTIFACT_OUT" ] || { echo -e "${RED}❌ Tauri 번들 산출물을 찾을 수 없습니다: src-tauri/target/release/bundle${NC}"; exit 1; }
 fi
-
-ARTIFACT_OUT="$BUNDLE_APP"
-RESULT_DIR="$(dirname "$BUNDLE_APP")"
-ARTIFACT_LABEL="$APP_NAME.app"
+RESULT_DIR="$(dirname "$ARTIFACT_OUT")"
+ARTIFACT_LABEL="$(basename "$ARTIFACT_OUT")"
 
 if [ "$SIGN_PACKAGE" = true ]; then
   echo -e "${YELLOW}🛡️ Codesigning (Apple Distribution)...${NC}"
