@@ -139,6 +139,7 @@ class Options:
     dry_run: bool = False
     json_output: bool = False
     non_interactive: bool = os.environ.get("UBS_NON_INTERACTIVE", "true") == "true"
+    non_interactive_explicit: bool = "UBS_NON_INTERACTIVE" in os.environ
     skip_clean: bool = os.environ.get("UBS_SKIP_CLEAN", "true") == "true"
     fail_fast: bool = False
     version_bump: str = os.environ.get("UBS_VERSION_BUMP", "none")
@@ -1082,8 +1083,8 @@ def parse_options(argv: Sequence[str]) -> Options:
         if value == "--all": options.build_all = True
         elif value == "--dry-run": options.dry_run = True
         elif value == "--json": options.json_output = True
-        elif value == "--non-interactive": options.non_interactive = True
-        elif value == "--interactive": options.non_interactive = False
+        elif value == "--non-interactive": options.non_interactive = True; options.non_interactive_explicit = True
+        elif value == "--interactive": options.non_interactive = False; options.non_interactive_explicit = True
         elif value == "--skip-clean": options.skip_clean = True
         elif value == "--clean": options.skip_clean = False
         elif value == "--fail-fast": options.fail_fast = True
@@ -1560,6 +1561,44 @@ def run_update(options: Options) -> int:
     return result.returncode
 
 
+def local_config_path(root: Path) -> Path:
+    return root / ".ubs" / "config.json"
+
+
+def load_local_config(root: Path) -> dict:
+    path = local_config_path(root)
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def resolve_non_interactive_default(root: Path) -> bool:
+    """First real-terminal build asks once whether to default to unattended
+    or interactive builds, then remembers the choice in .ubs/config.json."""
+    config = load_local_config(root)
+    if "non_interactive_default" in config:
+        return bool(config["non_interactive_default"])
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return True
+    print(f"{CYAN}처음 빌드네요 — 앞으로 기본 동작을 선택해주세요.{NC}")
+    print(f"  {YELLOW}1) 무인 빌드{NC} (기본값 자동 적용, 매번 묻지 않음)")
+    print(f"  {YELLOW}2) 대화형 빌드{NC} (버전·플랫폼을 매번 직접 선택)")
+    try:
+        non_interactive = input("선택 (1-2) [1]: ").strip() != "2"
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{YELLOW}입력을 받지 못해 이번만 무인 빌드로 진행합니다 (다음 실행에서 다시 물어봅니다).{NC}")
+        return True
+    config["non_interactive_default"] = non_interactive
+    path = local_config_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"{CYAN}ℹ️  {path}에 저장했습니다. 매 실행마다 --interactive 또는 --non-interactive로 재정의할 수 있습니다.{NC}")
+    return non_interactive
+
+
 def main(argv: Sequence[str]) -> int:
     try:
         options = parse_options(argv)
@@ -1627,6 +1666,8 @@ def main(argv: Sequence[str]) -> int:
             return 0 if projects else 1
         if options.json_output:
             raise ValueError("--json은 detect, audit, plan 또는 graph 명령에서 지원합니다.")
+        if not options.non_interactive_explicit:
+            options.non_interactive = resolve_non_interactive_default(root)
         report = BuildReport(options.report_json)
         projects = selected_projects(options, root)
         if options.project_path and not projects:

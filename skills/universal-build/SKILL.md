@@ -33,6 +33,8 @@ Find the nearest workspace directory containing `build.sh`. If `scripts/ubs.py` 
 
 Normal interactive local builds use `UBS_OPEN_OUTPUT=auto` and reveal successful artifact folders after every selected project has finished. Agent, MCP, CI, and redirected runs should explicitly set `UBS_OPEN_OUTPUT=false`; use `true` only when the user asked to open a desktop file manager. Folder opening is best effort and does not change a successful build status.
 
+On its first build in a project, `build.sh` asks a human at a real terminal whether to default to unattended or interactive builds and remembers the answer in `.ubs/config.json`. Agent/MCP/CI runs are never prompted (no TTY), so no extra flag is required; pass `--non-interactive` explicitly only if you want to be certain regardless of environment.
+
 Do not silently add signing, publishing, notarization, upload, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
 
 ## Update the Managed Runtime
