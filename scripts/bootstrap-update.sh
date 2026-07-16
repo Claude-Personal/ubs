@@ -31,8 +31,10 @@ done
 # shellcheck source=scripts/lib/update.sh
 source "$UPDATE_LIB"
 
-if [ -z "${UBS_RUST_HELPER:-}" ] && [ -x "$ROOT/.ubs/bin/ubs-helper" ]; then
-  UBS_RUST_HELPER="$ROOT/.ubs/bin/ubs-helper"
+HELPER_SUFFIX=""
+[ "${OS:-}" = "Windows_NT" ] && HELPER_SUFFIX=".exe"
+if [ -z "${UBS_RUST_HELPER:-}" ] && [ -x "$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX" ]; then
+  UBS_RUST_HELPER="$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX"
   export UBS_RUST_HELPER
 fi
 
@@ -52,7 +54,18 @@ if [ "$JSON" = true ]; then
   set -e
   MODE="$([ "$CHECK" = true ] && echo check || { [ "$DRY_RUN" = true ] && echo dry-run || echo apply; })"
   UBS_UPDATE_JSON_STATUS="$STATUS" UBS_UPDATE_JSON_MODE="$MODE" \
-    python3 -c 'import json, os, sys; print(json.dumps({"ok": os.environ["UBS_UPDATE_JSON_STATUS"] == "0", "status": int(os.environ["UBS_UPDATE_JSON_STATUS"]), "mode": os.environ["UBS_UPDATE_JSON_MODE"], "output": sys.stdin.read().splitlines()}, ensure_ascii=False, indent=2))' <<< "$OUTPUT"
+    python3 -c '
+import json, os, re, sys
+lines = sys.stdin.read().splitlines()
+local = remote = backup = None
+changed = []
+for line in lines:
+    match = re.match(r"Universal Build Script: local=(\S+) remote=(\S+)", line)
+    if match: local, remote = match.groups()
+    elif line.startswith("  - "): changed.append(line[4:])
+    elif line.startswith("백업 위치: "): backup = line.removeprefix("백업 위치: ")
+print(json.dumps({"schema_version": 1, "ok": os.environ["UBS_UPDATE_JSON_STATUS"] == "0", "status": int(os.environ["UBS_UPDATE_JSON_STATUS"]), "mode": os.environ["UBS_UPDATE_JSON_MODE"], "local_version": local, "remote_version": remote, "changed_paths": changed, "backup_path": backup, "output": lines}, ensure_ascii=False, indent=2))
+' <<< "$OUTPUT"
   exit "$STATUS"
 fi
 

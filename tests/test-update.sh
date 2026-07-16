@@ -26,6 +26,19 @@ while IFS=' ' read -r kind hash relative extra; do
   cp "$REPO_DIR/$relative" "$TARGET/$relative"
 done < "$REPO_DIR/scripts/update-manifest.txt"
 
+if [ "${UBS_TEST_LEGACY_RUST_HELPER:-false}" = true ]; then
+  mkdir -p "$TARGET/.ubs/bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'case "$1" in' \
+    '  sha256) python3 -c '\''import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())'\'' "$2" ;;' \
+    '  validate-relative) exit 0 ;;' \
+    '  *) exit 2 ;;' \
+    'esac' > "$TARGET/.ubs/bin/ubs-helper"
+  chmod +x "$TARGET/.ubs/bin/ubs-helper"
+  UBS_RUST_HELPER="$TARGET/.ubs/bin/ubs-helper"
+  export UBS_RUST_HELPER
+fi
+
 printf '\n# local drift\n' >> "$TARGET/scripts/build-node.sh"
 DRIFT_HASH="$(sha256_file "$TARGET/scripts/build-node.sh")"
 
@@ -51,12 +64,23 @@ printf '%s\n' "$DRY_OUTPUT" | grep -Fq 'dry-run이므로' || {
   exit 1
 }
 
+if [ "${UBS_TEST_LEGACY_RUST_HELPER:-false}" = true ]; then
+  printf '\n// force native helper rebuild\n' >> "$TARGET/native/ubs-helper/src/main.rs"
+fi
+
 UPDATE_OUTPUT="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update)"
 cmp "$TARGET/scripts/build-node.sh" "$REMOTE/scripts/build-node.sh" || {
   echo "업데이트 파일이 원격 검증본과 다릅니다." >&2
   exit 1
 }
+if [ "${UBS_TEST_LEGACY_RUST_HELPER:-false}" = true ]; then
+  "$TARGET/.ubs/bin/ubs-helper" verify-manifest \
+    "$REMOTE/scripts/update-manifest.txt" "$TARGET" native/ubs-helper/src/main.rs || {
+    echo "업데이트 후 Rust helper 자동 재빌드가 실행되지 않았습니다." >&2
+    exit 1
+  }
+fi
 BACKUP_DIR="$(printf '%s\n' "$UPDATE_OUTPUT" | sed -n 's/^백업 위치: //p')"
 [ -n "$BACKUP_DIR" ] && [ -f "$BACKUP_DIR/scripts/build-node.sh" ] || {
   echo "업데이트 백업을 찾을 수 없습니다." >&2
@@ -90,6 +114,14 @@ printf '%s\n' "$CORE_MISSING_CHECK" | grep -Fq 'scripts/ubs.py' || {
   echo "bootstrap update가 누락된 Python 코어를 찾지 못했습니다." >&2
   exit 1
 }
+CORE_MISSING_JSON="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+  bash "$TARGET/build.sh" update --check --json)"
+printf '%s' "$CORE_MISSING_JSON" | python3 -c '
+import json, sys
+result = json.load(sys.stdin)
+assert result["schema_version"] == 1
+assert "scripts/ubs.py" in result["changed_paths"]
+'
 UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update >/dev/null
 cmp "$TARGET/scripts/ubs.py" "$REMOTE/scripts/ubs.py" || {
@@ -102,8 +134,14 @@ UPDATE_JSON="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
 printf '%s' "$UPDATE_JSON" | python3 -c '
 import json, sys
 result = json.load(sys.stdin)
+assert result["schema_version"] == 1
 assert result["ok"] is True
 assert result["mode"] == "check"
+assert result["status"] == 0
+assert result["local_version"] == "3.1.0"
+assert result["remote_version"] == "3.1.0"
+assert result["changed_paths"] == []
+assert result["backup_path"] is None
 assert isinstance(result["output"], list)
 '
 
@@ -150,7 +188,7 @@ fi
 }
 
 # 원격 버전이 더 낮으면 명시적 허용 없이 적용하지 않아야 한다.
-sed 's/^version 3\.0\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
+sed 's/^version 3\.1\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
   > "$REMOTE/scripts/update-manifest.txt"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
