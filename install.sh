@@ -42,19 +42,26 @@ install_file() {
 
   mkdir -p "$(dirname "$destination")"
   curl -fsSL "$REPO_RAW/$relative" -o "$destination"
-  chmod +x "$destination"
+  case "$destination" in *.sh) chmod +x "$destination" ;; esac
   echo -e "${GREEN}설치: $destination${NC}"
 }
 
 # 모든 어댑터를 설치해야 모노레포 루트에서 서로 다른 프로젝트를 함께 빌드할 수 있다.
+install_file "VERSION"
 install_file "build.sh"
 install_file "scripts/lib/detect.sh"
 install_file "scripts/lib/audit.sh"
 install_file "scripts/lib/node-package-manager.sh"
+install_file "scripts/lib/update.sh"
 install_file "scripts/build-flutter.sh"
 install_file "scripts/build-tauri-macos.sh"
 install_file "scripts/build-gradle.sh"
 install_file "scripts/build-node.sh"
+install_file "scripts/FLUTTER_VERSION"
+install_file "scripts/TAURI_VERSION"
+install_file "skills/universal-build/SKILL.md"
+install_file "skills/universal-build/agents/openai.yaml"
+install_file "skills/universal-build/references/optimization.md"
 
 if [ "$PROJECT_TYPE" = "flutter" ]; then
   if [ ! -f ".env.example" ]; then

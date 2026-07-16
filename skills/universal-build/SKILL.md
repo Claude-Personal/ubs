@@ -1,6 +1,6 @@
 ---
 name: universal-build
-description: Detect, audit, plan, and run release builds across Flutter, Tauri, Android, Kotlin, Gradle, React, Next.js, and Node workspaces that contain the Universal Build Script. Use when an AI agent must inspect buildable projects, assess optimization or obfuscation coverage, select release outputs, dry-run a monorepo build, or execute ./build.sh safely.
+description: Detect, audit, plan, update, and run release builds across Flutter, Tauri, Android, Kotlin, Gradle, React, Next.js, and Node workspaces that contain the Universal Build Script. Use when an AI agent must inspect buildable projects, assess optimization or obfuscation coverage, select release outputs, check or apply managed runtime updates, dry-run a monorepo build, or execute ./build.sh safely.
 ---
 
 # Universal Build
@@ -31,6 +31,17 @@ Find the nearest workspace directory containing both `build.sh` and `scripts/lib
 4. Report successes, failures, and artifact paths. Preserve full failing command output when diagnosing.
 
 Do not silently add signing, publishing, notarization, upload, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
+
+## Update the Managed Runtime
+
+Keep updates separate from builds. Never update merely because the user requested a build. When the user asks to update Universal Build, inspect first:
+
+```bash
+./build.sh update --check
+./build.sh update --dry-run
+```
+
+Summarize the local and remote versions, changed managed files, and backup behavior. Run `./build.sh update` only after explicit user authorization. Do not override project source, environment files, signing material, or templates. Report the `.ubs/backups/` path after a successful update.
 
 ## Select Outputs
 
