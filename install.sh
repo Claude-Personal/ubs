@@ -151,6 +151,16 @@ if [ "$PROJECT_TYPE" = "tauri" ]; then
   mkdir -p signing
   echo -e "${CYAN}ℹ️  signing/ 폴더에 *.provisionprofile, *.entitlements 파일을 넣어주세요.${NC}"
 
+  # 서명 identity·프로파일이 실수로 커밋되지 않도록 .gitignore에 등록
+  if [ -f ".gitignore" ] && ! grep -q "^signing/$" .gitignore; then
+    printf '\n# Universal-Build-Script (Tauri macOS)\nsigning/\n.env.macos\n' >> .gitignore
+    echo -e "${GREEN}✅ .gitignore에 signing/, .env.macos 추가${NC}"
+  elif [ ! -f ".gitignore" ]; then
+    printf '# Universal-Build-Script (Tauri macOS)\nsigning/\n.env.macos\n' > .gitignore
+    echo -e "${GREEN}✅ Created: .gitignore (signing/, .env.macos)${NC}"
+  fi
+  chmod 600 .env.macos 2>/dev/null || true
+
   echo -e "\n------------------------------------------------------------"
   echo -e "${GREEN}🎉 Installation complete!${NC}"
   echo -e "------------------------------------------------------------"

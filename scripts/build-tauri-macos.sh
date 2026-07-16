@@ -135,6 +135,11 @@ if [ -z "$ENTITLEMENTS" ] || [ ! -f "$ENTITLEMENTS" ]; then
   exit 1
 fi
 
+if [ -z "$TAURI_INSTALLER_IDENTITY" ]; then
+  echo -e "${RED}❌ TAURI_INSTALLER_IDENTITY 가 설정되지 않았습니다 (.env.macos).${NC}"
+  exit 1
+fi
+
 echo -e "${CYAN}🔑 서명 ID: $TAURI_SIGN_IDENTITY${NC}"
 echo -e "${CYAN}📄 Provisioning Profile: $PROVISION_PROFILE${NC}"
 
@@ -165,24 +170,30 @@ OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-false}"
 
 BUILD_START_TS=$(date +%s)
 
+echo -e "${BLUE}📥 npm install...${NC}"
+if [ -f "package-lock.json" ]; then
+  npm ci --no-fund --no-audit
+else
+  npm install --no-fund --no-audit
+fi
+
 if [ "$OBFUSCATE_JS" = "true" ]; then
-  echo -e "${BLUE}🚀 [1/5] npm install & 프런트엔드 빌드...${NC}"
-  npm install --no-fund --no-audit >/dev/null 2>&1 || true
+  echo -e "${BLUE}🚀 [1/4] 프런트엔드 빌드...${NC}"
   npm run build
 
-  echo -e "${YELLOW}🔒 [2/5] JS 난독화 (javascript-obfuscator)...${NC}"
+  echo -e "${YELLOW}🔒 [2/4] JS 난독화 (javascript-obfuscator)...${NC}"
   if ! npx --yes javascript-obfuscator dist --output dist \
     --compact true --control-flow-flattening true --string-array true \
     --string-array-encoding base64 --self-defending true; then
-    echo -e "${RED}⚠️  javascript-obfuscator 실행 실패 — 난독화 없이 계속합니다.${NC}"
+    echo -e "${RED}❌ javascript-obfuscator 실행 실패 — 난독화 안 된 결과가 패키징되지 않도록 중단합니다.${NC}"
+    exit 1
   fi
 
-  echo -e "${BLUE}🚀 [3/5] tauri build (프런트엔드 재빌드 스킵)...${NC}"
-  npm run tauri build -- --config '{"build":{"beforeBuildCommand":""}}'
+  echo -e "${BLUE}🚀 [3/4] tauri build (프런트엔드 재빌드 스킵)...${NC}"
+  npm run tauri build -- --config '{"build":{"beforeBuildCommand":""}}' "$@"
 else
-  echo -e "${BLUE}🚀 [1/5] npm install & tauri build...${NC}"
-  npm install --no-fund --no-audit >/dev/null 2>&1 || true
-  npm run tauri build
+  echo -e "${BLUE}🚀 [1/3] tauri build...${NC}"
+  npm run tauri build -- "$@"
   echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true bash scripts/build-tauri-macos.sh${NC}"
 fi
 
@@ -192,7 +203,7 @@ if [ ! -d "$BUNDLE_APP" ]; then
   exit 1
 fi
 
-echo -e "${YELLOW}🛡️ [4/5] Codesigning (Apple Distribution)...${NC}"
+echo -e "${YELLOW}🛡️ Codesigning (Apple Distribution)...${NC}"
 cp "$PROVISION_PROFILE" "$BUNDLE_APP/Contents/embedded.provisionprofile"
 codesign --deep --force --options runtime \
   --entitlements "$ENTITLEMENTS" \
@@ -200,12 +211,7 @@ codesign --deep --force --options runtime \
   "$BUNDLE_APP"
 codesign --verify --deep --strict --verbose=2 "$BUNDLE_APP"
 
-echo -e "${YELLOW}📦 [5/5] Building signed installer package (.pkg)...${NC}"
-if [ -z "$TAURI_INSTALLER_IDENTITY" ]; then
-  echo -e "${RED}❌ TAURI_INSTALLER_IDENTITY 가 설정되지 않았습니다 (.env.macos).${NC}"
-  exit 1
-fi
-
+echo -e "${YELLOW}📦 Building signed installer package (.pkg)...${NC}"
 mkdir -p "$SIGNING_DIR/build"
 PKG_OUT="$SIGNING_DIR/build/${APP_NAME}.pkg"
 productbuild --component "$BUNDLE_APP" /Applications \
@@ -228,9 +234,15 @@ BUILD_ELAPSED_SEC=$((BUILD_ELAPSED % 60))
 BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  afplay /System/Library/Sounds/Glass.aiff
-  say "Build process completed successfully"
-  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"$APP_NAME.pkg is ready\""
+  # 빌드는 이미 성공했으므로 알림 명령 실패로 스크립트 전체가 죽지 않도록 best-effort 처리.
+  afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
+  say "Build process completed successfully" 2>/dev/null || true
+  osascript \
+    -e 'on run argv' \
+    -e 'display notification (item 1 of argv) with title "✅ Build Finished" subtitle (item 2 of argv)' \
+    -e 'end run' \
+    "Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)" \
+    "$APP_NAME.pkg is ready" 2>/dev/null || true
 fi
 
 echo -e "------------------------------------------------------------"
