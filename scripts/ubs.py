@@ -883,6 +883,7 @@ DIRECTORY_PATTERNS = {
 }
 
 
+@lru_cache(maxsize=None)
 def discover_artifacts(project: Project) -> List[str]:
     found = set()
     for pattern in ARTIFACT_PATTERNS.get(project.type, []):
@@ -893,23 +894,42 @@ def discover_artifacts(project: Project) -> List[str]:
     return sorted(found)
 
 
+def pattern_static_prefix(pattern: str) -> Optional[str]:
+    """Portion of an ARTIFACT_PATTERNS glob before its first wildcard segment."""
+    segments = []
+    for segment in pattern.split("/"):
+        if "*" in segment:
+            break
+        segments.append(segment)
+    return "/".join(segments) if segments else None
+
+
+def preferred_output_roots(project: Project) -> List[Path]:
+    """Derive common output roots per project type straight from ARTIFACT_PATTERNS.
+
+    Prefixes sharing the same top-level path segment are collapsed to their
+    common ancestor (e.g. flutter's four patterns all live under "build" and
+    become one root), while prefixes under different top-level segments stay
+    separate (e.g. tauri's "src-tauri/..." and "signing/build").
+    """
+    groups: Dict[str, List[str]] = {}
+    for pattern in ARTIFACT_PATTERNS.get(project.type, []):
+        prefix = pattern_static_prefix(pattern)
+        if prefix:
+            groups.setdefault(prefix.split("/", 1)[0], []).append(prefix)
+    return [project.path / os.path.commonpath(prefixes) for prefixes in groups.values()]
+
+
 def artifact_output_directories(project: Project) -> List[Path]:
     """Return useful folders to reveal after a successful build."""
     artifacts = [Path(value) for value in discover_artifacts(project)]
     if not artifacts:
+        eprint(f"{RED}⚠️  예상 출력 폴더를 찾을 수 없습니다: {project.path}{NC}")
         return []
 
-    preferred_roots: Dict[str, Sequence[Path]] = {
-        "flutter": (project.path / "build",),
-        "tauri": (
-            project.path / "signing" / "build",
-            project.path / "src-tauri" / "target" / "release" / "bundle",
-        ),
-        "ios-xcode": (project.path / "build" / "ubs",),
-    }
     selected: Set[Path] = set()
     covered: Set[Path] = set()
-    for root in preferred_roots.get(project.type, ()):
+    for root in preferred_output_roots(project):
         resolved_root = root.resolve()
         matches = {
             artifact for artifact in artifacts
