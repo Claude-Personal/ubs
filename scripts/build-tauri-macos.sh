@@ -21,7 +21,7 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 
 check_script_update() {
