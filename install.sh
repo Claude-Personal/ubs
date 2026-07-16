@@ -49,6 +49,7 @@ install_file() {
 # 모든 어댑터를 설치해야 모노레포 루트에서 서로 다른 프로젝트를 함께 빌드할 수 있다.
 install_file "build.sh"
 install_file "scripts/lib/detect.sh"
+install_file "scripts/lib/audit.sh"
 install_file "scripts/lib/node-package-manager.sh"
 install_file "scripts/build-flutter.sh"
 install_file "scripts/build-tauri-macos.sh"
