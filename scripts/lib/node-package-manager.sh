@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+# packageManager 필드와 lock 파일을 이용해 Node 패키지 매니저를 통일해서 선택한다.
+
+detect_node_package_manager() {
+  local declared=""
+
+  if command -v python3 >/dev/null 2>&1 && [ -f package.json ]; then
+    declared=$(python3 - package.json <<'PY'
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("packageManager", "")
+    print(value.split("@", 1)[0] if isinstance(value, str) else "")
+except Exception:
+    print("")
+PY
+    )
+  fi
+
+  case "$declared" in
+    npm|pnpm|yarn|bun) NODE_PM="$declared" ;;
+    *)
+      if [ -f pnpm-lock.yaml ]; then NODE_PM="pnpm"
+      elif [ -f yarn.lock ]; then NODE_PM="yarn"
+      elif [ -f bun.lockb ] || [ -f bun.lock ]; then NODE_PM="bun"
+      else NODE_PM="npm"
+      fi
+      ;;
+  esac
+
+  command -v "$NODE_PM" >/dev/null 2>&1 || {
+    echo "$NODE_PM 패키지 매니저가 필요합니다." >&2
+    return 1
+  }
+}
+
+install_node_dependencies() {
+  case "$NODE_PM" in
+    pnpm)
+      if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile
+      else pnpm install
+      fi
+      ;;
+    yarn)
+      if [ -f .yarnrc.yml ]; then yarn install --immutable
+      elif [ -f yarn.lock ]; then yarn install --frozen-lockfile
+      else yarn install
+      fi
+      ;;
+    bun)
+      if [ -f bun.lockb ] || [ -f bun.lock ]; then bun install --frozen-lockfile
+      else bun install
+      fi
+      ;;
+    npm)
+      if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+        npm ci --no-fund --no-audit
+      else
+        npm install --no-fund --no-audit
+      fi
+      ;;
+  esac
+}
+
+run_node_script() {
+  local script="$1"
+  shift
+  "$NODE_PM" run "$script" "$@"
+}

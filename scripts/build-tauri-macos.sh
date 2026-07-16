@@ -17,15 +17,18 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ==========================================
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.2.1"
+SCRIPT_VERSION="2.0.0"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 
 check_script_update() {
+  [ "${UBS_ALLOW_SELF_UPDATE:-false}" = "true" ] || return 0
+  [ "${UBS_NON_INTERACTIVE:-false}" = "true" ] && return
   local remote_version
   remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/scripts/TAURI_VERSION" 2>/dev/null | tr -d '[:space:]')
   [ -z "$remote_version" ] && return
@@ -65,6 +68,11 @@ if [ ! -f "$CONF" ]; then
   exit 1
 fi
 
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo -e "${RED}❌ 현재 Tauri 어댑터는 macOS 서명 및 .pkg 빌드 전용입니다.${NC}" >&2
+  exit 1
+fi
+
 command -v python3 >/dev/null 2>&1 || { echo -e "${RED}❌ python3 이 필요합니다.${NC}"; exit 1; }
 
 APP_NAME=$(python3 -c "import json;print(json.load(open('$CONF'))['productName'])")
@@ -78,13 +86,46 @@ echo -e "${CYAN}📦 앱: $APP_NAME  |  현재 버전: $CURRENT_VERSION${NC}"
 
 VERSION_NAME="$CURRENT_VERSION"
 
-echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
-echo -e "  ${YELLOW}1) Patch 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')"
-echo -e "  ${YELLOW}2) Minor 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')"
-echo -e "  ${YELLOW}3) Major 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')"
-echo -e "  ${YELLOW}4) 버전 유지${NC}"
-echo -e "  ${YELLOW}5) 취소${NC}"
-read -p "선택 (1-5): " VERSION_CHOICE
+VERSION_CHANGED=false
+BUILD_COMPLETED=false
+
+set_tauri_version() {
+  local version="$1"
+  python3 - "$CONF" "$version" <<'PYEOF'
+import re, sys
+path, new_version = sys.argv[1], sys.argv[2]
+content = open(path).read()
+content = re.sub(r'("version":\s*")[^"]+(")', rf'\g<1>{new_version}\g<2>', content, count=1)
+open(path, "w").write(content)
+PYEOF
+}
+
+restore_version_if_incomplete() {
+  if [ "$VERSION_CHANGED" = true ] && [ "$BUILD_COMPLETED" != true ]; then
+    set_tauri_version "$CURRENT_VERSION"
+    echo -e "${YELLOW}↩️  빌드가 완료되지 않아 버전을 $CURRENT_VERSION 으로 복원했습니다.${NC}" >&2
+  fi
+}
+trap restore_version_if_incomplete EXIT
+
+if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
+  case "${UBS_VERSION_BUMP:-none}" in
+    patch) VERSION_CHOICE=1 ;;
+    minor) VERSION_CHOICE=2 ;;
+    major) VERSION_CHOICE=3 ;;
+    none) VERSION_CHOICE=4 ;;
+    *) echo -e "${RED}지원하지 않는 UBS_VERSION_BUMP 값입니다.${NC}" >&2; exit 2 ;;
+  esac
+  echo -e "${CYAN}비대화형 버전 정책: ${UBS_VERSION_BUMP:-none}${NC}"
+else
+  echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
+  echo -e "  ${YELLOW}1) Patch 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')"
+  echo -e "  ${YELLOW}2) Minor 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')"
+  echo -e "  ${YELLOW}3) Major 버전 올리기${NC}  → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')"
+  echo -e "  ${YELLOW}4) 버전 유지${NC}"
+  echo -e "  ${YELLOW}5) 취소${NC}"
+  read -p "선택 (1-5): " VERSION_CHOICE
+fi
 
 case $VERSION_CHOICE in
   1) NEW_VERSION=$(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}') ;;
@@ -96,13 +137,8 @@ case $VERSION_CHOICE in
 esac
 
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
-  python3 - "$CONF" "$NEW_VERSION" <<'PYEOF'
-import re, sys
-path, new_version = sys.argv[1], sys.argv[2]
-content = open(path).read()
-content = re.sub(r'("version":\s*")[^"]+(")', rf'\g<1>{new_version}\g<2>', content, count=1)
-open(path, "w").write(content)
-PYEOF
+  set_tauri_version "$NEW_VERSION"
+  VERSION_CHANGED=true
   echo -e "${GREEN}✅ 버전 업데이트: $CURRENT_VERSION → $NEW_VERSION${NC}"
 fi
 
@@ -111,38 +147,68 @@ fi
 # ==========================================
 
 ENV_FILE=".env.macos"
-if [ -f "$ENV_FILE" ]; then
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-fi
+dotenv_value() {
+  python3 - "$ENV_FILE" "$1" <<'PYEOF'
+import sys
+path, wanted = sys.argv[1], sys.argv[2]
+try:
+    for raw in open(path, encoding="utf-8"):
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != wanted:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        print(value, end="")
+        break
+except FileNotFoundError:
+    pass
+PYEOF
+}
 
-if [ -z "$TAURI_SIGN_IDENTITY" ]; then
-  echo -e "${RED}❌ TAURI_SIGN_IDENTITY 가 설정되지 않았습니다.${NC}"
-  echo -e "${YELLOW}   .env.macos.example 을 복사해서 값을 채워주세요:${NC}"
-  echo -e "  cp .env.macos.example .env.macos"
-  exit 1
+if [ -f "$ENV_FILE" ]; then
+  TAURI_SIGN_IDENTITY="${TAURI_SIGN_IDENTITY:-$(dotenv_value TAURI_SIGN_IDENTITY)}"
+  TAURI_INSTALLER_IDENTITY="${TAURI_INSTALLER_IDENTITY:-$(dotenv_value TAURI_INSTALLER_IDENTITY)}"
+  TAURI_PROVISION_PROFILE="${TAURI_PROVISION_PROFILE:-$(dotenv_value TAURI_PROVISION_PROFILE)}"
+  TAURI_ENTITLEMENTS="${TAURI_ENTITLEMENTS:-$(dotenv_value TAURI_ENTITLEMENTS)}"
+  TAURI_OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-$(dotenv_value TAURI_OBFUSCATE_JS)}"
 fi
 
 SIGNING_DIR="signing"
 PROVISION_PROFILE="${TAURI_PROVISION_PROFILE:-$(find "$SIGNING_DIR" -maxdepth 1 -iname '*.provisionprofile' 2>/dev/null | head -1)}"
 ENTITLEMENTS="${TAURI_ENTITLEMENTS:-$(find "$SIGNING_DIR" -maxdepth 1 -iname '*.entitlements' 2>/dev/null | head -1)}"
+PACKAGE_MODE="${UBS_TAURI_PACKAGE_MODE:-auto}"
+SIGN_PACKAGE=false
+SIGNING_READY=true
+[ -n "${TAURI_SIGN_IDENTITY:-}" ] || SIGNING_READY=false
+[ -n "${TAURI_INSTALLER_IDENTITY:-}" ] || SIGNING_READY=false
+[ -n "$PROVISION_PROFILE" ] && [ -f "$PROVISION_PROFILE" ] || SIGNING_READY=false
+[ -n "$ENTITLEMENTS" ] && [ -f "$ENTITLEMENTS" ] || SIGNING_READY=false
 
-if [ -z "$PROVISION_PROFILE" ] || [ ! -f "$PROVISION_PROFILE" ]; then
-  echo -e "${RED}❌ Provisioning profile 을 찾을 수 없습니다 (signing/*.provisionprofile).${NC}"
-  exit 1
-fi
-if [ -z "$ENTITLEMENTS" ] || [ ! -f "$ENTITLEMENTS" ]; then
-  echo -e "${RED}❌ Entitlements 파일을 찾을 수 없습니다 (signing/*.entitlements).${NC}"
-  exit 1
-fi
+case "$PACKAGE_MODE" in
+  auto)
+    if [ "$SIGNING_READY" = true ]; then SIGN_PACKAGE=true
+    else echo -e "${YELLOW}ℹ️  Apple 서명 설정이 불완전하여 기본 Tauri .app 빌드만 생성합니다.${NC}"
+    fi
+    ;;
+  signed)
+    if [ "$SIGNING_READY" != true ]; then
+      echo -e "${RED}❌ signed 모드에는 서명 identity, provisioning profile, entitlements가 모두 필요합니다.${NC}" >&2
+      exit 1
+    fi
+    SIGN_PACKAGE=true
+    ;;
+  unsigned) SIGN_PACKAGE=false ;;
+  *) echo -e "${RED}❌ UBS_TAURI_PACKAGE_MODE는 auto, signed, unsigned 중 하나여야 합니다.${NC}" >&2; exit 2 ;;
+esac
 
-if [ -z "$TAURI_INSTALLER_IDENTITY" ]; then
-  echo -e "${RED}❌ TAURI_INSTALLER_IDENTITY 가 설정되지 않았습니다 (.env.macos).${NC}"
-  exit 1
+if [ "$SIGN_PACKAGE" = true ]; then
+  echo -e "${CYAN}🔑 서명 ID: $TAURI_SIGN_IDENTITY${NC}"
+  echo -e "${CYAN}📄 Provisioning Profile: $PROVISION_PROFILE${NC}"
 fi
-
-echo -e "${CYAN}🔑 서명 ID: $TAURI_SIGN_IDENTITY${NC}"
-echo -e "${CYAN}📄 Provisioning Profile: $PROVISION_PROFILE${NC}"
 
 # ==========================================
 # 환경변수 주입 확인 (.env → import.meta.env)
@@ -171,16 +237,19 @@ OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-false}"
 
 BUILD_START_TS=$(date +%s)
 
-echo -e "${BLUE}📥 npm install...${NC}"
-if [ -f "package-lock.json" ]; then
-  npm ci --no-fund --no-audit
+# shellcheck source=lib/node-package-manager.sh
+source "$SCRIPT_DIR/lib/node-package-manager.sh"
+detect_node_package_manager
+if [ "${UBS_SKIP_INSTALL:-false}" != "true" ]; then
+  echo -e "${BLUE}📥 $NODE_PM install...${NC}"
+  install_node_dependencies
 else
-  npm install --no-fund --no-audit
+  echo -e "${CYAN}ℹ️  UBS_SKIP_INSTALL=true — 의존성 설치를 건너뜁니다.${NC}"
 fi
 
 if [ "$OBFUSCATE_JS" = "true" ]; then
   echo -e "${BLUE}🚀 [1/4] 프런트엔드 빌드...${NC}"
-  npm run build
+  run_node_script build
 
   echo -e "${YELLOW}🔒 [2/4] JS 난독화 (javascript-obfuscator)...${NC}"
   if ! npx --yes javascript-obfuscator dist --output dist \
@@ -191,11 +260,11 @@ if [ "$OBFUSCATE_JS" = "true" ]; then
   fi
 
   echo -e "${BLUE}🚀 [3/4] tauri build (프런트엔드 재빌드 스킵)...${NC}"
-  npm run tauri build -- --config '{"build":{"beforeBuildCommand":""}}' "$@"
+  run_node_script tauri build -- --config '{"build":{"beforeBuildCommand":""}}' "$@"
 else
   echo -e "${BLUE}🚀 [1/3] tauri build...${NC}"
-  npm run tauri build -- "$@"
-  echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true bash scripts/build-tauri-macos.sh${NC}"
+  run_node_script tauri build -- "$@"
+  echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true ./build.sh${NC}"
 fi
 
 BUNDLE_APP="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
@@ -204,26 +273,36 @@ if [ ! -d "$BUNDLE_APP" ]; then
   exit 1
 fi
 
-echo -e "${YELLOW}🛡️ Codesigning (Apple Distribution)...${NC}"
-echo -e "${CYAN}🧹 Provisioning profile 및 앱 번들의 확장 속성을 제거합니다...${NC}"
-xattr -cr "$PROVISION_PROFILE" "$BUNDLE_APP"
-cp "$PROVISION_PROFILE" "$BUNDLE_APP/Contents/embedded.provisionprofile"
-codesign --deep --force --options runtime \
-  --entitlements "$ENTITLEMENTS" \
-  --sign "$TAURI_SIGN_IDENTITY" \
-  "$BUNDLE_APP"
-codesign --verify --deep --strict --verbose=2 "$BUNDLE_APP"
+ARTIFACT_OUT="$BUNDLE_APP"
+RESULT_DIR="$(dirname "$BUNDLE_APP")"
+ARTIFACT_LABEL="$APP_NAME.app"
 
-echo -e "${YELLOW}📦 Building signed installer package (.pkg)...${NC}"
-mkdir -p "$SIGNING_DIR/build"
-PKG_OUT="$SIGNING_DIR/build/${APP_NAME}.pkg"
-productbuild --component "$BUNDLE_APP" /Applications \
-  --sign "$TAURI_INSTALLER_IDENTITY" \
-  "$PKG_OUT"
+if [ "$SIGN_PACKAGE" = true ]; then
+  echo -e "${YELLOW}🛡️ Codesigning (Apple Distribution)...${NC}"
+  echo -e "${CYAN}🧹 Provisioning profile 및 앱 번들의 확장 속성을 제거합니다...${NC}"
+  xattr -cr "$PROVISION_PROFILE" "$BUNDLE_APP"
+  cp "$PROVISION_PROFILE" "$BUNDLE_APP/Contents/embedded.provisionprofile"
+  codesign --deep --force --options runtime \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$TAURI_SIGN_IDENTITY" \
+    "$BUNDLE_APP"
+  codesign --verify --deep --strict --verbose=2 "$BUNDLE_APP"
 
-echo -e "${BLUE}📂 결과 폴더 여는 중...${NC}"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  open "$SIGNING_DIR/build"
+  echo -e "${YELLOW}📦 Building signed installer package (.pkg)...${NC}"
+  mkdir -p "$SIGNING_DIR/build"
+  PKG_OUT="$SIGNING_DIR/build/${APP_NAME}.pkg"
+  productbuild --component "$BUNDLE_APP" /Applications \
+    --sign "$TAURI_INSTALLER_IDENTITY" \
+    "$PKG_OUT"
+  ARTIFACT_OUT="$PKG_OUT"
+  RESULT_DIR="$SIGNING_DIR/build"
+  ARTIFACT_LABEL="$APP_NAME.pkg"
+fi
+BUILD_COMPLETED=true
+
+if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
+  echo -e "${BLUE}📂 결과 폴더 여는 중...${NC}"
+  open "$RESULT_DIR"
 fi
 
 # ==========================================
@@ -236,7 +315,7 @@ BUILD_ELAPSED_MIN=$((BUILD_ELAPSED / 60))
 BUILD_ELAPSED_SEC=$((BUILD_ELAPSED % 60))
 BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
+if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
   # 빌드는 이미 성공했으므로 알림 명령 실패로 스크립트 전체가 죽지 않도록 best-effort 처리.
   afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
   say "Build process completed successfully" 2>/dev/null || true
@@ -245,13 +324,15 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     -e 'display notification (item 1 of argv) with title "✅ Build Finished" subtitle (item 2 of argv)' \
     -e 'end run' \
     "Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)" \
-    "$APP_NAME.pkg is ready" 2>/dev/null || true
+    "$ARTIFACT_LABEL is ready" 2>/dev/null || true
 fi
 
 echo -e "------------------------------------------------------------"
 echo -e "${GREEN}✅ BUILD COMPLETED SUCCESSFULLY!${NC}"
 echo -e "🏷️  Version : $NEW_VERSION"
-echo -e "📍 Package : $PKG_OUT"
+echo -e "📍 Artifact : $ARTIFACT_OUT"
 echo -e "⏱️  빌드 시간 : $BUILD_ELAPSED_FMT"
 echo -e "------------------------------------------------------------"
-echo -e "${CYAN}ℹ️  Transporter 앱으로 $PKG_OUT 를 업로드하면 App Store Connect 에 반영됩니다.${NC}"
+if [ "$SIGN_PACKAGE" = true ]; then
+  echo -e "${CYAN}ℹ️  Transporter 앱으로 $ARTIFACT_OUT 를 업로드하면 App Store Connect 에 반영됩니다.${NC}"
+fi
