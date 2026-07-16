@@ -18,7 +18,7 @@ Find the nearest workspace directory containing both `build.sh` and `scripts/lib
    ```bash
    ./build.sh detect --json .
    ./build.sh audit --json .
-   ./build.sh --dry-run .
+   ./build.sh plan --json .
    ```
 
 2. Summarize detected projects, planned adapters, requested artifacts, and audit gaps. Read [references/optimization.md](references/optimization.md) before interpreting optimization or obfuscation results.
@@ -69,7 +69,7 @@ Expose the existing commands through a thin MCP server instead of duplicating lo
 
 - `detect_projects(root)` → `./build.sh detect --json ROOT`
 - `audit_build(root)` → `./build.sh audit --json ROOT`
-- `plan_build(root, options)` → `./build.sh --dry-run ... ROOT`
+- `plan_build(root, options)` → `./build.sh plan --json ... ROOT`
 - `run_build(root, options)` → `./build.sh ... ROOT`
 
 Keep `run_build` visibly mutating and require explicit user intent. Validate option values, restrict `root` to allowed workspaces, stream stderr separately, return process exit codes, and apply execution timeouts. Do not expose arbitrary shell fragments as MCP arguments.

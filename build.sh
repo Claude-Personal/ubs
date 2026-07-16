@@ -34,6 +34,8 @@ Universal Build Script
   ./build.sh detect --json [경로]    AI/MCP용 감지 결과 JSON
   ./build.sh audit [경로]            최적화·난독화 설정 감사
   ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
+  ./build.sh plan [경로]             읽기 전용 빌드 계획
+  ./build.sh plan --json [경로]      AI/MCP용 빌드 계획 JSON
   ./build.sh --dry-run               실행할 빌드만 미리 확인
   ./build.sh --interactive           버전과 플랫폼을 직접 선택
   ./build.sh build --project <경로>  지정 프로젝트 빌드
@@ -169,6 +171,84 @@ print()
 '
 }
 
+plan_projects() {
+  local root="$1"
+  local type path adapter relative_adapter
+  while IFS=$'\t' read -r type path; do
+    [ -z "$type" ] && continue
+    if [ -n "$TYPE_FILTER" ] && [ "$type" != "$TYPE_FILTER" ]; then
+      continue
+    fi
+    adapter="$(adapter_for "$type")" || continue
+    relative_adapter="${adapter#"$SCRIPT_DIR"/}"
+    printf '%s\t%s\t%s\n' "$type" "$path" "$relative_adapter"
+  done < <(projects_for_root "$root")
+}
+
+print_plan() {
+  local found=false
+  local type path adapter
+  while IFS=$'\t' read -r type path adapter; do
+    [ -z "$type" ] && continue
+    found=true
+    run_project "$type" "$path" true
+  done < <(plan_projects "$1")
+  [ "$found" = true ] || { echo "계획할 프로젝트가 없습니다." >&2; return 1; }
+}
+
+print_plan_json() {
+  require_python_for_json
+  plan_projects "$1" | \
+  UBS_PLAN_VERSION_BUMP="$VERSION_BUMP" \
+  UBS_PLAN_FLUTTER_PLATFORM="$FLUTTER_PLATFORM" \
+  UBS_PLAN_FLUTTER_OUTPUTS="$FLUTTER_OUTPUTS" \
+  UBS_PLAN_SKIP_CLEAN="$SKIP_CLEAN" \
+  UBS_PLAN_GRADLE_TASK="${UBS_GRADLE_TASK:-}" \
+  UBS_PLAN_NODE_BUILD_SCRIPT="${UBS_NODE_BUILD_SCRIPT:-build}" \
+  UBS_PLAN_TAURI_PACKAGE_MODE="${UBS_TAURI_PACKAGE_MODE:-auto}" \
+  UBS_PLAN_SKIP_INSTALL="${UBS_SKIP_INSTALL:-false}" \
+  UBS_PLAN_TAURI_OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-false}" \
+  python3 -c '
+import json, os, sys
+
+items = []
+for line in sys.stdin:
+    fields = line.rstrip("\n").split("\t", 2)
+    if len(fields) != 3:
+        continue
+    project_type, path, adapter = fields
+    options = {
+        "version_bump": os.environ["UBS_PLAN_VERSION_BUMP"],
+    }
+    if project_type == "flutter":
+        outputs = os.environ["UBS_PLAN_FLUTTER_OUTPUTS"]
+        options.update({
+            "outputs": outputs,
+            "output_selection": "auto-platform" if outputs == "auto" else "explicit",
+            "platform": os.environ["UBS_PLAN_FLUTTER_PLATFORM"] if outputs == "auto" else None,
+            "skip_clean": os.environ["UBS_PLAN_SKIP_CLEAN"] == "true",
+        })
+    elif project_type == "tauri":
+        options["package_mode"] = os.environ["UBS_PLAN_TAURI_PACKAGE_MODE"]
+        options["skip_install"] = os.environ["UBS_PLAN_SKIP_INSTALL"] == "true"
+        options["obfuscate_js"] = os.environ["UBS_PLAN_TAURI_OBFUSCATE_JS"] == "true"
+    elif project_type in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
+        options["gradle_task"] = os.environ["UBS_PLAN_GRADLE_TASK"] or "auto"
+    elif project_type in {"react", "next", "node"}:
+        options["build_script"] = os.environ["UBS_PLAN_NODE_BUILD_SCRIPT"]
+        options["skip_install"] = os.environ["UBS_PLAN_SKIP_INSTALL"] == "true"
+    items.append({
+        "type": project_type,
+        "path": path,
+        "adapter": adapter,
+        "options": options,
+    })
+
+json.dump(items, sys.stdout, ensure_ascii=False, indent=2)
+print()
+'
+}
+
 run_project() {
   local type="$1"
   local project_dir="$2"
@@ -210,6 +290,7 @@ if [ $# -gt 0 ]; then
   case "$1" in
     detect|list) COMMAND="detect"; shift ;;
     audit) COMMAND="audit"; shift ;;
+    plan) COMMAND="plan"; shift ;;
     build) COMMAND="build"; shift ;;
     help|-h|--help) usage; exit 0 ;;
   esac
@@ -300,8 +381,22 @@ if [ "$COMMAND" = "audit" ]; then
   exit $?
 fi
 
+if [ "$COMMAND" = "plan" ]; then
+  PLAN_ROOT="$ROOT"
+  if [ -n "$PROJECT_PATH" ]; then
+    PLAN_ROOT="$(canonical_dir "$PROJECT_PATH")" || {
+      echo "프로젝트 경로를 열 수 없습니다: $PROJECT_PATH" >&2
+      exit 1
+    }
+  fi
+  if [ "$JSON_OUTPUT" = true ]; then print_plan_json "$PLAN_ROOT"
+  else print_plan "$PLAN_ROOT"
+  fi
+  exit $?
+fi
+
 if [ "$JSON_OUTPUT" = true ]; then
-  echo "--json은 detect 또는 audit 명령에서 지원합니다." >&2
+  echo "--json은 detect, audit 또는 plan 명령에서 지원합니다." >&2
   exit 2
 fi
 
