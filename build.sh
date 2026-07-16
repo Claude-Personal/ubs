@@ -31,6 +31,9 @@ Universal Build Script
 사용법:
   ./build.sh                         자동 감지 + 안전한 기본값으로 무인 빌드
   ./build.sh detect [경로]           하위 프로젝트 탐색
+  ./build.sh detect --json [경로]    AI/MCP용 감지 결과 JSON
+  ./build.sh audit [경로]            최적화·난독화 설정 감사
+  ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
   ./build.sh --dry-run               실행할 빌드만 미리 확인
   ./build.sh --interactive           버전과 플랫폼을 직접 선택
   ./build.sh build --project <경로>  지정 프로젝트 빌드
@@ -39,6 +42,7 @@ Universal Build Script
 주요 옵션:
   --version-bump none|build|patch|minor|major
   --flutter-platform auto|all|ios|android
+  --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
   --fail-fast
 
@@ -51,6 +55,7 @@ Universal Build Script
   UBS_NODE_BUILD_SCRIPT=build:production
   UBS_SKIP_INSTALL=true
   UBS_SKIP_CLEAN=true
+  UBS_FLUTTER_OUTPUTS=appbundle,web
 EOF
 }
 
@@ -64,6 +69,17 @@ adapter_for() {
   esac
 }
 
+projects_for_root() {
+  local root="$1"
+  local direct_type
+  direct_type="$(detect_project_type "$root" 2>/dev/null || true)"
+  if [ -n "$direct_type" ]; then
+    printf '%s\t%s\n' "$direct_type" "$root"
+  else
+    scan_projects "$root"
+  fi
+}
+
 print_projects() {
   local root="$1"
   local found=false
@@ -74,12 +90,83 @@ print_projects() {
     [ -z "$type" ] && continue
     found=true
     printf '%-24s  %s\n' "$type" "$path"
-  done < <(scan_projects "$root")
+  done < <(projects_for_root "$root")
 
   if [ "$found" = false ]; then
     echo "감지된 프로젝트가 없습니다." >&2
     return 1
   fi
+}
+
+require_python_for_json() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo "--json 출력에는 python3가 필요합니다." >&2
+    exit 1
+  }
+}
+
+print_projects_json() {
+  require_python_for_json
+  projects_for_root "$1" | python3 -c '
+import json, sys
+items = []
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    project_type, path = line.split("\t", 1)
+    items.append({"type": project_type, "path": path})
+json.dump(items, sys.stdout, ensure_ascii=False, indent=2)
+print()
+'
+}
+
+audit_projects() {
+  local root="$1"
+  local type path
+  while IFS=$'\t' read -r type path; do
+    [ -z "$type" ] && continue
+    if [ -n "$TYPE_FILTER" ] && [ "$type" != "$TYPE_FILTER" ]; then
+      continue
+    fi
+    audit_project "$type" "$path"
+  done < <(projects_for_root "$root")
+}
+
+print_audit() {
+  local found=false
+  local type path category check status detail
+  printf '%-22s %-14s %-22s %-18s %s\n' "TYPE" "CATEGORY" "CHECK" "STATUS" "PATH"
+  while IFS=$'\t' read -r type path category check status detail; do
+    [ -z "$type" ] && continue
+    found=true
+    printf '%-22s %-14s %-22s %-18s %s\n' "$type" "$category" "$check" "$status" "$path"
+    printf '  %s\n' "$detail"
+  done < <(audit_projects "$1")
+  [ "$found" = true ] || { echo "감사할 프로젝트가 없습니다." >&2; return 1; }
+}
+
+print_audit_json() {
+  require_python_for_json
+  audit_projects "$1" | python3 -c '
+import json, sys
+items = []
+for line in sys.stdin:
+    fields = line.rstrip("\n").split("\t", 5)
+    if len(fields) != 6:
+        continue
+    project_type, path, category, check, status, detail = fields
+    items.append({
+        "type": project_type,
+        "path": path,
+        "category": category,
+        "check": check,
+        "status": status,
+        "detail": detail,
+    })
+json.dump(items, sys.stdout, ensure_ascii=False, indent=2)
+print()
+'
 }
 
 run_project() {
@@ -100,6 +187,9 @@ run_project() {
   echo -e "${CYAN}▶ [$type] $project_dir${NC}"
   if [ "$dry_run" = true ]; then
     echo "  (dry-run) bash $adapter"
+    if [ "$type" = "flutter" ]; then
+      echo "  Flutter outputs=$FLUTTER_OUTPUTS platform=$FLUTTER_PLATFORM version-bump=$VERSION_BUMP"
+    fi
     return 0
   fi
 
@@ -109,6 +199,7 @@ run_project() {
     UBS_NON_INTERACTIVE="$NON_INTERACTIVE" \
     UBS_VERSION_BUMP="$VERSION_BUMP" \
     UBS_FLUTTER_PLATFORM="$FLUTTER_PLATFORM" \
+    UBS_FLUTTER_OUTPUTS="$FLUTTER_OUTPUTS" \
     UBS_SKIP_CLEAN="$SKIP_CLEAN" \
     bash "$adapter"
   )
@@ -118,6 +209,7 @@ COMMAND="build"
 if [ $# -gt 0 ]; then
   case "$1" in
     detect|list) COMMAND="detect"; shift ;;
+    audit) COMMAND="audit"; shift ;;
     build) COMMAND="build"; shift ;;
     help|-h|--help) usage; exit 0 ;;
   esac
@@ -133,11 +225,14 @@ VERSION_BUMP="${UBS_VERSION_BUMP:-none}"
 FLUTTER_PLATFORM="${UBS_FLUTTER_PLATFORM:-auto}"
 SKIP_CLEAN="${UBS_SKIP_CLEAN:-true}"
 FAIL_FAST=false
+JSON_OUTPUT=false
+FLUTTER_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) BUILD_ALL=true ;;
     --dry-run) DRY_RUN=true ;;
+    --json) JSON_OUTPUT=true ;;
     --non-interactive) NON_INTERACTIVE=true ;;
     --interactive) NON_INTERACTIVE=false ;;
     --skip-clean) SKIP_CLEAN=true ;;
@@ -151,6 +246,11 @@ while [ $# -gt 0 ]; do
     --flutter-platform)
       [ $# -ge 2 ] || { echo "--flutter-platform 값이 필요합니다." >&2; exit 2; }
       FLUTTER_PLATFORM="$2"
+      shift
+      ;;
+    --flutter-outputs)
+      [ $# -ge 2 ] || { echo "--flutter-outputs 값이 필요합니다." >&2; exit 2; }
+      FLUTTER_OUTPUTS="$2"
       shift
       ;;
     --type)
@@ -177,10 +277,32 @@ ROOT="$(canonical_dir "$ROOT")" || {
 
 case "$VERSION_BUMP" in none|build|patch|minor|major) ;; *) echo "잘못된 version bump: $VERSION_BUMP" >&2; exit 2 ;; esac
 case "$FLUTTER_PLATFORM" in auto|all|ios|android) ;; *) echo "잘못된 Flutter 플랫폼: $FLUTTER_PLATFORM" >&2; exit 2 ;; esac
+if [ "$FLUTTER_OUTPUTS" != "auto" ] && ! echo ",$FLUTTER_OUTPUTS," | grep -Eqs '^,(appbundle|apk|ipa|web)(,(appbundle|apk|ipa|web))*,$'; then
+  echo "잘못된 Flutter 출력: $FLUTTER_OUTPUTS" >&2
+  exit 2
+fi
 
 if [ "$COMMAND" = "detect" ]; then
-  print_projects "$ROOT"
+  if [ "$JSON_OUTPUT" = true ]; then print_projects_json "$ROOT"
+  else print_projects "$ROOT"
+  fi
   exit $?
+fi
+
+if [ "$COMMAND" = "audit" ]; then
+  AUDIT_LIB="$SCRIPT_DIR/scripts/lib/audit.sh"
+  [ -f "$AUDIT_LIB" ] || { echo "감사 모듈을 찾을 수 없습니다: $AUDIT_LIB" >&2; exit 1; }
+  # shellcheck source=scripts/lib/audit.sh
+  source "$AUDIT_LIB"
+  if [ "$JSON_OUTPUT" = true ]; then print_audit_json "$ROOT"
+  else print_audit "$ROOT"
+  fi
+  exit $?
+fi
+
+if [ "$JSON_OUTPUT" = true ]; then
+  echo "--json은 detect 또는 audit 명령에서 지원합니다." >&2
+  exit 2
 fi
 
 if [ -n "$PROJECT_PATH" ]; then

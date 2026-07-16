@@ -2,7 +2,7 @@
 
 # =================================================================
 # Flutter Production Optimization Build Script
-# Description: Automated Build for Android (AAB) & iOS (IPA)
+# Description: Automated Build for Android (AAB/APK), iOS (IPA), and Web
 # Features: Obfuscation, Tree-shaking, AOT, Smart Notifications, Auto Version Bump
 # =================================================================
 
@@ -152,7 +152,31 @@ fi
 # ==========================================
 
 echo ""
-if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
+BUILD_ANDROID=false
+BUILD_APK=false
+BUILD_IOS=false
+BUILD_WEB=false
+CUSTOM_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
+
+if [ "$CUSTOM_OUTPUTS" != "auto" ]; then
+  if ! printf '%s\n' "$CUSTOM_OUTPUTS" | grep -Eqs '^(appbundle|apk|ipa|web)(,(appbundle|apk|ipa|web))*$'; then
+    echo -e "${RED}지원하지 않는 UBS_FLUTTER_OUTPUTS 값입니다: $CUSTOM_OUTPUTS${NC}" >&2
+    exit 2
+  fi
+  OLD_IFS="$IFS"
+  IFS=','
+  for output in $CUSTOM_OUTPUTS; do
+    case "$output" in
+      appbundle) BUILD_ANDROID=true ;;
+      apk) BUILD_APK=true ;;
+      ipa) BUILD_IOS=true ;;
+      web) BUILD_WEB=true ;;
+      *) echo -e "${RED}지원하지 않는 UBS_FLUTTER_OUTPUTS 값입니다: $output${NC}" >&2; exit 2 ;;
+    esac
+  done
+  IFS="$OLD_IFS"
+  echo -e "${CYAN}Flutter 출력 지정: $CUSTOM_OUTPUTS${NC}"
+elif [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
   case "${UBS_FLUTTER_PLATFORM:-auto}" in
     auto)
       if [ "$(uname -s)" = "Darwin" ]; then PLATFORM_CHOICE=1
@@ -174,6 +198,7 @@ else
   read -p "선택 (1-4): " PLATFORM_CHOICE
 fi
 
+if [ "$CUSTOM_OUTPUTS" = "auto" ]; then
 case $PLATFORM_CHOICE in
   1)
     BUILD_IOS=true
@@ -200,6 +225,7 @@ case $PLATFORM_CHOICE in
     BUILD_ANDROID=true
     ;;
 esac
+fi
 
 PARALLEL_BUILD=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -249,7 +275,9 @@ else
   DART_DEFINE="--dart-define-from-file=$ENV_FILE"
 fi
 ANDROID_OUT="build/app/outputs/bundle/release"
+APK_OUT="build/app/outputs/flutter-apk"
 IOS_OUT="build/ios/ipa"
+WEB_OUT="build/web"
 
 # ==========================================
 # 빌드 시작
@@ -291,6 +319,17 @@ build_android() {
   fi
 }
 
+build_apk() {
+  echo -e "${YELLOW}🤖 Building Android APKs (Optimized, split per ABI)...${NC}"
+  flutter build apk --release \
+    $DART_DEFINE \
+    --obfuscate \
+    --split-debug-info=build/app/outputs/symbols \
+    --tree-shake-icons \
+    --split-per-abi \
+    --no-pub
+}
+
 build_ios() {
   echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
   # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
@@ -305,6 +344,14 @@ build_ios() {
     --no-pub
 }
 
+build_web() {
+  echo -e "${YELLOW}🌐 Building Flutter Web (Optimized)...${NC}"
+  flutter build web --release \
+    $DART_DEFINE \
+    --tree-shake-icons \
+    --no-pub
+}
+
 if [ "$PARALLEL_BUILD" = true ]; then
   echo -e "${BLUE}⏱️  Android·iOS 동시 빌드 시작 (로그가 섞여 보일 수 있음)${NC}"
   build_android &
@@ -312,8 +359,8 @@ if [ "$PARALLEL_BUILD" = true ]; then
   build_ios &
   IOS_PID=$!
 
-  wait "$ANDROID_PID"; ANDROID_STATUS=$?
-  wait "$IOS_PID"; IOS_STATUS=$?
+  if wait "$ANDROID_PID"; then ANDROID_STATUS=0; else ANDROID_STATUS=$?; fi
+  if wait "$IOS_PID"; then IOS_STATUS=0; else IOS_STATUS=$?; fi
 
   if [ "$ANDROID_STATUS" -ne 0 ] || [ "$IOS_STATUS" -ne 0 ]; then
     echo -e "${RED}❌ 동시 빌드 실패 (Android: $ANDROID_STATUS, iOS: $IOS_STATUS)${NC}"
@@ -323,6 +370,8 @@ else
   [ "$BUILD_ANDROID" = true ] && build_android
   [ "$BUILD_IOS" = true ] && build_ios
 fi
+[ "$BUILD_APK" = true ] && build_apk
+[ "$BUILD_WEB" = true ] && build_web
 BUILD_COMPLETED=true
 
 # ==========================================
@@ -357,6 +406,12 @@ if [ "$BUILD_ANDROID" = true ]; then
 fi
 if [ "$BUILD_IOS" = true ]; then
   echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+fi
+if [ "$BUILD_APK" = true ]; then
+  echo -e "📍 Android APK : $APK_OUT/ (ABI별 APK)"
+fi
+if [ "$BUILD_WEB" = true ]; then
+  echo -e "📍 Flutter Web : $WEB_OUT/"
 fi
 echo -e "⏱️  빌드 시간   : $BUILD_ELAPSED_FMT ($([ "$PARALLEL_BUILD" = true ] && echo 동시 || echo 순차) 빌드)"
 echo -e "------------------------------------------------------------"
