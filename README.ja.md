@@ -328,8 +328,6 @@ bash tests/test-rust-helper.sh
 - 自動 folder open も同じ検出規則を使うため、custom 出力先は手動で開く場合があります。
 - 更新 manifest は外部 hash pin を提供しますが、独立署名・透明性ログはありません。
 
-## ライセンスと外部コード
+## ライセンス
 
-MIT License — Copyright © 2026 kimdzhekhon. 2026 年に初めて作成・公開した著作物なら `2026` が適切で、`2024–2026` は 2024 年の先行著作物や公開を確認できる場合だけ使います。[米国著作権局の notice ガイド](https://www.copyright.gov/circs/circ03.pdf)、[OSI の MIT License](https://opensource.org/license/MIT)、[LICENSE](LICENSE) を参照してください。
-
-他プロジェクトのアイデア、公開 API、一般的な設計 pattern は参考にできますが、code や文章を小片に分けて出典を曖昧にコピーしてはいけません。実装を取り込む場合は license 互換性を確認し、必要な copyright、LICENSE、NOTICE、出典を保持します。GPL/AGPL など義務が異なる code は個別確認なしに混在させません。今回の output-folder 実装はこの repository 向けに独立して作成しました。
+MIT License — Copyright © 2026 kimdzhekhon

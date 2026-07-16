@@ -1022,12 +1022,6 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh
 - [x] Xcode-only iOS 네이티브 어댑터
 - [x] 선택형 로컬 MCP 서버 패키지
 
-## 라이선스와 외부 코드 사용
+## 라이선스
 
 MIT License — Copyright © 2026 kimdzhekhon
-
-이 저장소를 실제로 2026년에 처음 작성·공개했다면 `2026`이 맞습니다. `2024-2026`은 2024년의 최초 공개 또는 그때부터 이어진 저작물이 있다는 근거가 있을 때만 사용합니다. 저작권 표시는 일반적으로 최초 공개 연도를 포함하며, MIT 원문은 저작권 표시와 허가 문구를 복제물에 유지하도록 요구합니다. [미국 저작권청의 notice 설명](https://www.copyright.gov/circs/circ03.pdf)과 [OSI MIT License](https://opensource.org/license/MIT)를 참고하십시오.
-
-다른 오픈소스의 기능 아이디어·공개 API·일반적인 설계 패턴은 참고할 수 있지만, 코드나 문서를 “조금씩” 복사해 출처를 흐리면 안 됩니다. 실제 코드를 가져올 때는 원본 라이선스가 MIT 프로젝트와 호환되는지 확인하고 필요한 저작권 표시·LICENSE·NOTICE·출처를 보존합니다. GPL/AGPL 등 의무가 다른 코드는 별도 검토 없이 섞지 않습니다. 이번 결과 폴더 기능은 외부 구현을 복사하지 않고 저장소 구조에 맞게 독립 작성했습니다.
-
-자세한 허가 조건은 [LICENSE](LICENSE)를 확인하십시오.

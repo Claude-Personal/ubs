@@ -338,8 +338,6 @@ bash tests/test-rust-helper.sh
 - 自动打开目录使用同一套产物规则，因此自定义输出路径可能需要手动打开。
 - 更新 manifest 支持外部 hash pin，但没有独立签名或透明日志。
 
-## 许可证与外部代码
+## 许可证
 
-MIT License — Copyright © 2026 kimdzhekhon。如果作品在 2026 年首次创作并公开，`2026` 更合适；只有能证明存在 2024 年的早期作品或首次公开时，才使用 `2024–2026`。参见[美国版权局 notice 指南](https://www.copyright.gov/circs/circ03.pdf)、[OSI MIT License](https://opensource.org/license/MIT)和 [LICENSE](LICENSE)。
-
-可以研究其他开源项目的思想、公开 API 和通用设计模式，但不能把复制的代码或文字拆成小片段来掩盖来源。引入实现前必须确认许可证兼容性，并保留要求的版权、LICENSE、NOTICE 和出处。GPL/AGPL 等义务不同的代码未经专门审查不要混入。本次产物目录功能是针对本仓库独立实现的。
+MIT License — Copyright © 2026 kimdzhekhon
