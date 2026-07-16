@@ -20,10 +20,12 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="2.0.0"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 
 check_script_update() {
+  [ "${UBS_ALLOW_SELF_UPDATE:-false}" = "true" ] || return 0
+  [ "${UBS_NON_INTERACTIVE:-false}" = "true" ] && return
   local remote_version
   remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/scripts/FLUTTER_VERSION" 2>/dev/null | tr -d '[:space:]')
   [ -z "$remote_version" ] && return
@@ -61,17 +63,52 @@ PUBSPEC="pubspec.yaml"
 # 현재 버전 읽기 (예: 1.0.0+1)
 CURRENT_VERSION=$(grep '^version:' $PUBSPEC | sed 's/version: //' | tr -d '[:space:]')
 VERSION_NAME=$(echo $CURRENT_VERSION | cut -d'+' -f1)  # 1.0.0
-BUILD_NUMBER=$(echo $CURRENT_VERSION | cut -d'+' -f2)  # 1
+case "$CURRENT_VERSION" in
+  *+*) BUILD_NUMBER=$(echo "$CURRENT_VERSION" | cut -d'+' -f2) ;;
+  *) BUILD_NUMBER=0 ;;
+esac
+
+VERSION_CHANGED=false
+BUILD_COMPLETED=false
+
+set_pubspec_version() {
+  local version="$1"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    sed -i '' "s/^version: .*/version: $version/" "$PUBSPEC"
+  else
+    sed -i "s/^version: .*/version: $version/" "$PUBSPEC"
+  fi
+}
+
+restore_version_if_incomplete() {
+  if [ "$VERSION_CHANGED" = true ] && [ "$BUILD_COMPLETED" != true ]; then
+    set_pubspec_version "$CURRENT_VERSION"
+    echo -e "${YELLOW}↩️  빌드가 완료되지 않아 버전을 $CURRENT_VERSION 으로 복원했습니다.${NC}" >&2
+  fi
+}
+trap restore_version_if_incomplete EXIT
 
 echo -e "${CYAN}📦 현재 버전: $CURRENT_VERSION${NC}"
-echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
-echo -e "  ${YELLOW}1) Build Number만 올리기${NC}  → $VERSION_NAME+$((BUILD_NUMBER + 1))"
-echo -e "  ${YELLOW}2) Patch 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')+$((BUILD_NUMBER + 1))"
-echo -e "  ${YELLOW}3) Minor 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')+$((BUILD_NUMBER + 1))"
-echo -e "  ${YELLOW}4) Major 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')+$((BUILD_NUMBER + 1))"
-echo -e "  ${YELLOW}5) 버전 유지${NC}"
-echo -e "  ${YELLOW}6) 취소${NC}"
-read -p "선택 (1-6): " VERSION_CHOICE
+if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
+  case "${UBS_VERSION_BUMP:-none}" in
+    build) VERSION_CHOICE=1 ;;
+    patch) VERSION_CHOICE=2 ;;
+    minor) VERSION_CHOICE=3 ;;
+    major) VERSION_CHOICE=4 ;;
+    none) VERSION_CHOICE=5 ;;
+    *) echo -e "${RED}지원하지 않는 UBS_VERSION_BUMP 값입니다.${NC}" >&2; exit 2 ;;
+  esac
+  echo -e "${CYAN}비대화형 버전 정책: ${UBS_VERSION_BUMP:-none}${NC}"
+else
+  echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
+  echo -e "  ${YELLOW}1) Build Number만 올리기${NC}  → $VERSION_NAME+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}2) Patch 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}3) Minor 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}4) Major 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}5) 버전 유지${NC}"
+  echo -e "  ${YELLOW}6) 취소${NC}"
+  read -p "선택 (1-6): " VERSION_CHOICE
+fi
 
 case $VERSION_CHOICE in
   1)
@@ -105,7 +142,8 @@ esac
 
 # pubspec.yaml 버전 교체
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
-  sed -i '' "s/^version: .*/version: $NEW_VERSION/" $PUBSPEC
+  set_pubspec_version "$NEW_VERSION"
+  VERSION_CHANGED=true
   echo -e "${GREEN}✅ 버전 업데이트: $CURRENT_VERSION → $NEW_VERSION${NC}"
 fi
 
@@ -114,12 +152,27 @@ fi
 # ==========================================
 
 echo ""
-echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
-echo -e "  ${YELLOW}1) iOS + Android 둘 다${NC}"
-echo -e "  ${YELLOW}2) iOS만${NC}"
-echo -e "  ${YELLOW}3) Android만${NC}"
-echo -e "  ${YELLOW}4) 취소${NC}"
-read -p "선택 (1-4): " PLATFORM_CHOICE
+if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
+  case "${UBS_FLUTTER_PLATFORM:-auto}" in
+    auto)
+      if [ "$(uname -s)" = "Darwin" ]; then PLATFORM_CHOICE=1
+      else PLATFORM_CHOICE=3
+      fi
+      ;;
+    all) PLATFORM_CHOICE=1 ;;
+    ios) PLATFORM_CHOICE=2 ;;
+    android) PLATFORM_CHOICE=3 ;;
+    *) echo -e "${RED}지원하지 않는 UBS_FLUTTER_PLATFORM 값입니다.${NC}" >&2; exit 2 ;;
+  esac
+  echo -e "${CYAN}비대화형 Flutter 플랫폼: ${UBS_FLUTTER_PLATFORM:-auto}${NC}"
+else
+  echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
+  echo -e "  ${YELLOW}1) iOS + Android 둘 다${NC}"
+  echo -e "  ${YELLOW}2) iOS만${NC}"
+  echo -e "  ${YELLOW}3) Android만${NC}"
+  echo -e "  ${YELLOW}4) 취소${NC}"
+  read -p "선택 (1-4): " PLATFORM_CHOICE
+fi
 
 case $PLATFORM_CHOICE in
   1)
@@ -152,7 +205,8 @@ PARALLEL_BUILD=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARALLEL_PREFS_FILE="$SCRIPT_DIR/.build_prefs"
 
-if [ "$BUILD_IOS" = true ] && [ "$BUILD_ANDROID" = true ]; then
+if [ "$BUILD_IOS" = true ] && [ "$BUILD_ANDROID" = true ] && \
+   [ "${UBS_NON_INTERACTIVE:-false}" != "true" ]; then
   if [ -f "$PARALLEL_PREFS_FILE" ]; then
     source "$PARALLEL_PREFS_FILE"
     if [ "$PARALLEL_BUILD" = true ]; then
@@ -187,14 +241,13 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
-  echo -e "${RED}❌ 환경변수 파일이 없습니다 (.env.prod 또는 .env)${NC}"
-  echo -e "${YELLOW}  .env.example을 복사해서 값을 채워주세요:${NC}"
-  echo -e "  cp .env.example .env"
-  exit 1
+  ENV_FILE=""
+  DART_DEFINE=""
+  echo -e "${CYAN}ℹ️  .env 파일 없음 — dart-define 없이 빌드합니다.${NC}"
+else
+  echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
+  DART_DEFINE="--dart-define-from-file=$ENV_FILE"
 fi
-
-echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
-DART_DEFINE="--dart-define-from-file=$ENV_FILE"
 ANDROID_OUT="build/app/outputs/bundle/release"
 IOS_OUT="build/ios/ipa"
 
@@ -205,7 +258,11 @@ IOS_OUT="build/ios/ipa"
 BUILD_START_TS=$(date +%s)
 
 echo -e "${BLUE}🚀 [1/4] Cleaning & Fetching Dependencies...${NC}"
-flutter clean
+if [ "${UBS_SKIP_CLEAN:-false}" != "true" ]; then
+  flutter clean
+else
+  echo -e "${CYAN}ℹ️  UBS_SKIP_CLEAN=true — 기존 빌드 캐시를 유지합니다.${NC}"
+fi
 flutter pub get
 
 # 코드 생성 라이브러리(Freezed, Riverpod 등) 사용 시 주석 해제
@@ -221,15 +278,15 @@ build_android() {
     --tree-shake-icons \
     --no-pub
 
-  if [[ "$OSTYPE" == "darwin"* ]]; then
+  if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
     if [ -d "$ANDROID_OUT" ]; then
       open "$ANDROID_OUT"
     else
       echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
     fi
-  elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+  elif [[ "$OSTYPE" == "linux-gnu"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
     xdg-open "$ANDROID_OUT" 2>/dev/null || true
-  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]]; then
+  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
     explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
   fi
 }
@@ -266,6 +323,7 @@ else
   [ "$BUILD_ANDROID" = true ] && build_android
   [ "$BUILD_IOS" = true ] && build_ios
 fi
+BUILD_COMPLETED=true
 
 # ==========================================
 # 빌드 완료 알림 + 폴더 열기
@@ -277,10 +335,10 @@ BUILD_ELAPSED_MIN=$((BUILD_ELAPSED / 60))
 BUILD_ELAPSED_SEC=$((BUILD_ELAPSED % 60))
 BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  afplay /System/Library/Sounds/Glass.aiff
-  say "Build process completed successfully"
-  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\""
+if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
+  afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
+  say "Build process completed successfully" 2>/dev/null || true
+  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\"" 2>/dev/null || true
 
   if [ "$BUILD_IOS" = true ]; then
     if [ -d "$IOS_OUT" ]; then
