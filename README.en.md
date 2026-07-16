@@ -14,6 +14,8 @@
 
 Universal Build Script decides whether the current directory is one project or a monorepo, detects buildable projects, removes nested duplicates, and dispatches each project to an ecosystem adapter.
 
+Since 3.0, `build.sh` is a thin compatibility entry point. Python 3 owns discovery, audits, planning, process orchestration, JSON, and reports. Bash adapters execute ecosystem CLIs. An optional Rust helper provides native SHA-256 and safe-relative-path validation for updates.
+
 | Concern | Default behavior |
 |---|---|
 | Interaction | Non-interactive and CI-safe |
@@ -31,6 +33,17 @@ Install into an application root or monorepo root:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
 ```
+
+Python 3 is required. Rust is optional:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
+  | UBS_BUILD_RUST_HELPER=true bash
+
+./scripts/build-rust-helper.sh
+```
+
+> **Upgrading from 2.x to 3.0:** run the installer once with `UBS_FORCE=true`. The 2.x updater intentionally rejects newly introduced paths that were not in its security allowlist. After 3.0 is installed, `./build.sh update` manages the complete 24-file runtime bundle.
 
 Inspect first, then build:
 
@@ -123,7 +136,7 @@ flowchart TB
     A --> C
 ```
 
-The project is intentionally not shell-only. Bash remains a portable entry point, Python handles structured data, and ecosystem CLIs own compilation and optimization.
+The project is intentionally not shell-only. Bash remains a portable entry point, Python handles structured data, and ecosystem CLIs own compilation and optimization. When built, the Rust helper is preferred for updater hashing and path validation; otherwise the portable shell hash fallback remains available.
 
 ### Monorepo failure policy
 
@@ -313,6 +326,7 @@ An MCP wrapper should expose narrow typed tools for detect, audit, plan, and bui
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 bash tests/test-detection.sh
 bash tests/test-update.sh
+bash tests/test-rust-helper.sh
 scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
 diff -u scripts/update-manifest.txt /tmp/update-manifest.txt
 ```

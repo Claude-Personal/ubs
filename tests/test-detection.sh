@@ -8,7 +8,9 @@ source "$REPO_DIR/scripts/lib/detect.sh"
 
 FIXTURE="$(mktemp -d)"
 FIXTURE="$(canonical_dir "$FIXTURE")"
-trap 'rm -rf "$FIXTURE"' EXIT
+MALFORMED_FIXTURE="$(mktemp -d)"
+MALFORMED_FIXTURE="$(canonical_dir "$MALFORMED_FIXTURE")"
+trap 'rm -rf "$FIXTURE" "$MALFORMED_FIXTURE"' EXIT
 
 mkdir -p \
   "$FIXTURE/apps/desktop/src-tauri" \
@@ -74,6 +76,17 @@ import json, sys
 items = json.load(sys.stdin)
 assert len(items) == 5
 assert {item["type"] for item in items} == {"tauri", "flutter", "android", "kotlin-multiplatform", "react"}
+'
+
+# 비정상 dependency 필드가 있어도 유효한 build script는 안전하게 Node로 감지한다.
+printf '%s\n' '{"scripts":{"build":"node build.js"},"dependencies":null,"devDependencies":[]}' \
+  > "$MALFORMED_FIXTURE/package.json"
+MALFORMED_JSON="$(bash "$REPO_DIR/build.sh" detect --json "$MALFORMED_FIXTURE")"
+printf '%s' "$MALFORMED_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 1
+assert items[0]["type"] == "node"
 '
 
 AUDIT_JSON="$(bash "$REPO_DIR/build.sh" audit --json "$FIXTURE")"

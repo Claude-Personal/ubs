@@ -5,11 +5,11 @@ description: Detect, audit, plan, update, and run release builds across Flutter,
 
 # Universal Build
 
-Use the repository's `build.sh` as the single source of truth. Treat its JSON output as the machine contract and avoid reimplementing ecosystem detection inside the agent.
+Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Treat its JSON output as the machine contract. The optional Rust helper is an updater optimization, not a prerequisite for normal builds.
 
 ## Locate the Build Root
 
-Find the nearest workspace directory containing both `build.sh` and `scripts/lib/detect.sh`. Run all commands from that directory. If those files are absent, explain that the Universal Build Script is not installed instead of guessing build commands.
+Find the nearest workspace directory containing both `build.sh` and `scripts/ubs.py`. Run all commands from that directory. If those files are absent, explain that the Universal Build Script is not installed instead of guessing build commands. `scripts/lib/detect.sh` and `scripts/lib/audit.sh` are retained only for legacy compatibility and regression tests.
 
 ## Follow the Safe Workflow
 

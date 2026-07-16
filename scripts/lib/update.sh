@@ -7,7 +7,9 @@ UBS_UPDATE_DEFAULT_BASE_URL="https://raw.githubusercontent.com/kimdzhekhon/Unive
 
 ubs_update_allowed_path() {
   case "$1" in
-    VERSION|build.sh|install.sh|scripts/FLUTTER_VERSION|scripts/TAURI_VERSION|\
+    VERSION|build.sh|install.sh|scripts/ubs.py|scripts/bootstrap-update.sh|scripts/build-rust-helper.sh|\
+    native/ubs-helper/Cargo.toml|native/ubs-helper/Cargo.lock|native/ubs-helper/src/main.rs|\
+    scripts/FLUTTER_VERSION|scripts/TAURI_VERSION|\
     scripts/build-flutter.sh|scripts/build-tauri.sh|scripts/build-tauri-macos.sh|scripts/build-gradle.sh|\
     scripts/build-node.sh|scripts/lib/detect.sh|scripts/lib/audit.sh|\
     scripts/lib/node-package-manager.sh|scripts/lib/update.sh|\
@@ -22,6 +24,12 @@ ubs_update_required_paths() {
 VERSION
 build.sh
 install.sh
+scripts/ubs.py
+scripts/bootstrap-update.sh
+scripts/build-rust-helper.sh
+native/ubs-helper/Cargo.toml
+native/ubs-helper/Cargo.lock
+native/ubs-helper/src/main.rs
 scripts/FLUTTER_VERSION
 scripts/TAURI_VERSION
 scripts/build-flutter.sh
@@ -64,7 +72,9 @@ ubs_update_prune_backups() {
 }
 
 ubs_update_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
+  if [ -n "${UBS_RUST_HELPER:-}" ] && [ -x "$UBS_RUST_HELPER" ]; then
+    "$UBS_RUST_HELPER" sha256 "$1"
+  elif command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -102,6 +112,9 @@ ubs_update_cleanup() {
 ubs_update_safe_destination() {
   local root="$1" relative="$2" current component old_ifs
   ubs_update_allowed_path "$relative" || return 1
+  if [ -n "${UBS_RUST_HELPER:-}" ] && [ -x "$UBS_RUST_HELPER" ]; then
+    "$UBS_RUST_HELPER" validate-relative "$relative" || return 1
+  fi
   case "$relative" in /*|*../*|../*|*/..) return 1 ;; esac
 
   current="$root"

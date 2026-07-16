@@ -14,6 +14,8 @@
 
 脚本会判断当前目录是单项目还是 monorepo，检测可构建项目，排除嵌套重复项，并把每个项目交给对应的生态适配器。
 
+从 3.0 开始，`build.sh` 是轻量兼容入口。Python 3 负责检测、审计、计划、进程编排、JSON 与报告；Bash 适配器执行各生态 CLI。可选 Rust helper 为更新提供原生 SHA-256 与安全相对路径校验。
+
 | 维度 | 默认行为 |
 |---|---|
 | 交互 | 非交互，适合 CI |
@@ -34,6 +36,15 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./build.sh plan --json
 ./build.sh
 ```
+
+Python 3 为必需项，Rust 为可选项：
+
+```bash
+./scripts/build-rust-helper.sh
+# 或以 UBS_BUILD_RUST_HELPER=true 运行 install.sh
+```
+
+> **从 2.x 升级到 3.0：** 请使用 `UBS_FORCE=true` 运行一次安装器。2.x updater 会按安全白名单拒绝当时不存在的新 Python/Rust 路径。安装 3.0 后，`./build.sh update` 会管理完整的 24 文件运行时。
 
 构建指定产物并生成结构化报告：
 
@@ -94,7 +105,7 @@ flowchart TB
     G --> A
 ```
 
-项目并非强制使用纯 Shell。Bash 保持轻量兼容入口，Python 负责结构化数据，真正的编译和优化由各生态官方 CLI 完成。
+项目并非强制使用纯 Shell。Bash 保持轻量兼容入口，Python 负责结构化数据，真正的编译和优化由各生态官方 CLI 完成。Rust helper 存在时优先用于更新哈希与路径校验，否则使用可移植 fallback。
 
 ### Monorepo 失败策略
 
@@ -269,6 +280,7 @@ MCP 应暴露受限的类型化工具，而不是任意 Shell。必须限制 wor
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 bash tests/test-detection.sh
 bash tests/test-update.sh
+bash tests/test-rust-helper.sh
 ```
 
 测试使用临时 fixture 和模拟 CLI。真实 SDK 构建、签名以及产物级逆向验证仍需在具体项目环境中执行。

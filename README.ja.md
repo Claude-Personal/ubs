@@ -14,6 +14,8 @@
 
 現在のディレクトリが単一プロジェクトかモノレポかを判定し、ビルド可能なプロジェクトを検出して、重複する内部プロジェクトを除外したうえで適切なアダプターを実行します。
 
+3.0 以降、`build.sh` は薄い互換エントリーポイントです。Python 3 が検出・監査・計画・プロセス制御・JSON レポートを担当し、Bash アダプターが各 CLI を実行します。選択型 Rust helper は更新時の SHA-256 と安全な相対パス検証を担当します。
+
 | 観点 | 既定動作 |
 |---|---|
 | 実行 | 非対話・CI セーフ |
@@ -34,6 +36,15 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./build.sh plan --json
 ./build.sh
 ```
+
+Python 3 は必須、Rust は任意です。
+
+```bash
+./scripts/build-rust-helper.sh
+# または install.sh を UBS_BUILD_RUST_HELPER=true で実行
+```
+
+> **2.x から 3.0 への更新:** `UBS_FORCE=true` で installer を一度実行してください。2.x updater はセキュリティ許可リストにない新規 Python/Rust path を意図的に拒否します。3.0 以降は `./build.sh update` が 24 個の管理ファイルを更新します。
 
 成果物レポートを含む例:
 
@@ -94,7 +105,7 @@ flowchart TB
     G --> A
 ```
 
-Shell 単独には限定しません。Bash は互換性の高い薄い入口、Python は構造化データ、実際の最適化は各公式 CLI が担当します。
+Shell 単独には限定しません。Bash は互換性の高い薄い入口、Python は構造化データ、実際の最適化は各公式 CLI が担当します。Rust helper があれば更新 hash と path 検証に優先使用し、なければ portable fallback を使います。
 
 ### モノレポの失敗ポリシー
 
@@ -259,6 +270,7 @@ MCP は任意 Shell を公開せず、workspace root、enum オプション、ti
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 bash tests/test-detection.sh
 bash tests/test-update.sh
+bash tests/test-rust-helper.sh
 ```
 
 テストは一時 fixture とモック CLI を使います。実 SDK、署名、成果物レベルの逆解析確認は各プロジェクトで別途必要です。

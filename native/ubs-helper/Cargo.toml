@@ -1,0 +1,15 @@
+[package]
+name = "ubs-helper"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optional native integrity helper for Universal Build Script"
+
+[dependencies]
+sha2 = "0.10"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+codegen-units = 1
+panic = "abort"
