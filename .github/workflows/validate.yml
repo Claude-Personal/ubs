@@ -27,10 +27,17 @@ jobs:
           python-version: "3.13"
 
       - name: Validate Bash syntax
-        run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/test-detection.sh
+        run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 
       - name: Run behavior tests
-        run: bash tests/test-detection.sh
+        run: |
+          bash tests/test-detection.sh
+          bash tests/test-update.sh
+
+      - name: Validate update manifest
+        run: |
+          scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
+          diff -u scripts/update-manifest.txt /tmp/update-manifest.txt
 
       - name: Validate AI skill metadata
         run: |

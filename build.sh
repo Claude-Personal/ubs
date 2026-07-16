@@ -10,13 +10,27 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DETECT_LIB="$SCRIPT_DIR/scripts/lib/detect.sh"
 
-if [ ! -f "$DETECT_LIB" ]; then
+COMMAND="build"
+if [ $# -gt 0 ]; then
+  case "$1" in
+    detect|list) COMMAND="detect"; shift ;;
+    audit) COMMAND="audit"; shift ;;
+    plan) COMMAND="plan"; shift ;;
+    update) COMMAND="update"; shift ;;
+    build) COMMAND="build"; shift ;;
+    help|-h|--help) COMMAND="help"; shift ;;
+  esac
+fi
+
+if [ "$COMMAND" != "update" ] && [ "$COMMAND" != "help" ] && [ ! -f "$DETECT_LIB" ]; then
   echo "ERROR: 감지 모듈을 찾을 수 없습니다: $DETECT_LIB" >&2
   exit 1
 fi
 
-# shellcheck source=scripts/lib/detect.sh
-source "$DETECT_LIB"
+if [ "$COMMAND" != "update" ] && [ "$COMMAND" != "help" ]; then
+  # shellcheck source=scripts/lib/detect.sh
+  source "$DETECT_LIB"
+fi
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -36,6 +50,9 @@ Universal Build Script
   ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
   ./build.sh plan [경로]             읽기 전용 빌드 계획
   ./build.sh plan --json [경로]      AI/MCP용 빌드 계획 JSON
+  ./build.sh update --check          전체 런타임 업데이트 확인
+  ./build.sh update --dry-run        변경 파일 미리 보기
+  ./build.sh update                  검증·백업 후 안전 업데이트
   ./build.sh --dry-run               실행할 빌드만 미리 확인
   ./build.sh --interactive           버전과 플랫폼을 직접 선택
   ./build.sh build --project <경로>  지정 프로젝트 빌드
@@ -58,8 +75,14 @@ Universal Build Script
   UBS_SKIP_INSTALL=true
   UBS_SKIP_CLEAN=true
   UBS_FLUTTER_OUTPUTS=appbundle,web
+  UBS_UPDATE_BASE_URL=https://example.com/Universal-Build-Script
 EOF
 }
+
+if [ "$COMMAND" = "help" ]; then
+  usage
+  exit 0
+fi
 
 adapter_for() {
   case "$1" in
@@ -285,17 +308,6 @@ run_project() {
   )
 }
 
-COMMAND="build"
-if [ $# -gt 0 ]; then
-  case "$1" in
-    detect|list) COMMAND="detect"; shift ;;
-    audit) COMMAND="audit"; shift ;;
-    plan) COMMAND="plan"; shift ;;
-    build) COMMAND="build"; shift ;;
-    help|-h|--help) usage; exit 0 ;;
-  esac
-fi
-
 ROOT="$PWD"
 BUILD_ALL=false
 DRY_RUN=false
@@ -308,8 +320,19 @@ SKIP_CLEAN="${UBS_SKIP_CLEAN:-true}"
 FAIL_FAST=false
 JSON_OUTPUT=false
 FLUTTER_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
+UPDATE_CHECK=false
 
 while [ $# -gt 0 ]; do
+  if [ "$COMMAND" = "update" ]; then
+    case "$1" in
+      --check) UPDATE_CHECK=true ;;
+      --dry-run) DRY_RUN=true ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "update에서 지원하지 않는 옵션 또는 인자입니다: $1" >&2; exit 2 ;;
+    esac
+    shift
+    continue
+  fi
   case "$1" in
     --all) BUILD_ALL=true ;;
     --dry-run) DRY_RUN=true ;;
@@ -350,6 +373,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$COMMAND" = "update" ]; then
+  UPDATE_LIB="$SCRIPT_DIR/scripts/lib/update.sh"
+  [ -f "$UPDATE_LIB" ] || { echo "업데이트 모듈을 찾을 수 없습니다: $UPDATE_LIB" >&2; exit 1; }
+  # shellcheck source=scripts/lib/update.sh
+  source "$UPDATE_LIB"
+  ubs_run_update "$SCRIPT_DIR" "$UPDATE_CHECK" "$DRY_RUN"
+  exit $?
+fi
 
 ROOT="$(canonical_dir "$ROOT")" || {
   echo "경로를 열 수 없습니다: $ROOT" >&2
