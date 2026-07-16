@@ -21,6 +21,17 @@ SPEC.loader.exec_module(ubs)
 
 
 class PythonCoreTests(unittest.TestCase):
+    def test_standard_streams_are_configured_for_utf8(self) -> None:
+        first = mock.Mock()
+        second = mock.Mock()
+        ubs.configure_standard_streams(first, second)
+        first.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace",
+        )
+        second.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace",
+        )
+
     def test_windows_gradle_arguments_preserve_backslashes(self) -> None:
         value = r'-PstoreFile=C:\Users\me\release.jks "-Pcache=C:\build cache"'
         self.assertEqual(

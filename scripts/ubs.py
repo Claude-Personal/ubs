@@ -72,6 +72,24 @@ CYAN = "\033[0;36m"
 NC = "\033[0m"
 
 
+def configure_standard_streams(
+    stdout: object = sys.stdout,
+    stderr: object = sys.stderr,
+) -> None:
+    """Make localized status output portable across Windows and redirected CI logs."""
+    for stream in (stdout, stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (LookupError, OSError, ValueError):
+                # Embedded interpreters and already-closed streams may reject changes.
+                pass
+
+
+configure_standard_streams()
+
+
 USAGE = """Universal Build Script
 
 사용법:
