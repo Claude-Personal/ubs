@@ -5,6 +5,7 @@
 # Description: Automated Build + Codesign + Installer Package for
 #              Tauri 2.0 macOS apps (App Store / notarized distribution)
 # Features: Auto Version Bump, Codesign, productbuild .pkg, Smart Notifications
+# Warning: 90886 재발 시 entitlements에 application-identifier를 수동 주입하지 말고 Apple Developer Forums / Tauri 이슈를 확인하세요.
 # =================================================================
 
 set -e
@@ -21,7 +22,7 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 
 check_script_update() {
@@ -204,6 +205,8 @@ if [ ! -d "$BUNDLE_APP" ]; then
 fi
 
 echo -e "${YELLOW}🛡️ Codesigning (Apple Distribution)...${NC}"
+echo -e "${CYAN}🧹 Provisioning profile 및 앱 번들의 확장 속성을 제거합니다...${NC}"
+xattr -cr "$PROVISION_PROFILE" "$BUNDLE_APP"
 cp "$PROVISION_PROFILE" "$BUNDLE_APP/Contents/embedded.provisionprofile"
 codesign --deep --force --options runtime \
   --entitlements "$ENTITLEMENTS" \
