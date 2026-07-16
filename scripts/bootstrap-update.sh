@@ -33,8 +33,22 @@ source "$UPDATE_LIB"
 
 HELPER_SUFFIX=""
 [ "${OS:-}" = "Windows_NT" ] && HELPER_SUFFIX=".exe"
-if [ -z "${UBS_RUST_HELPER:-}" ] && [ -x "$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX" ]; then
-  UBS_RUST_HELPER="$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX"
+HELPER_PATH="$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX"
+HELPER_CHECKSUM="$HELPER_PATH.sha256"
+HELPER_VERIFIED=false
+if [ -f "$HELPER_PATH" ] && [ -f "$HELPER_CHECKSUM" ]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    HELPER_ACTUAL="$(sha256sum "$HELPER_PATH" | awk '{print $1}')"
+  else
+    HELPER_ACTUAL="$(shasum -a 256 "$HELPER_PATH" | awk '{print $1}')"
+  fi
+  [ "$HELPER_ACTUAL" = "$(tr -d '[:space:]' < "$HELPER_CHECKSUM")" ] && HELPER_VERIFIED=true
+fi
+if [ -z "${UBS_RUST_HELPER:-}" ] && \
+   [ ! -L "$ROOT/.ubs" ] && [ ! -L "$ROOT/.ubs/bin" ] && \
+   [ ! -L "$HELPER_PATH" ] && [ ! -L "$HELPER_CHECKSUM" ] && \
+   [ "$HELPER_VERIFIED" = true ] && [ -x "$HELPER_PATH" ]; then
+  UBS_RUST_HELPER="$HELPER_PATH"
   export UBS_RUST_HELPER
 fi
 

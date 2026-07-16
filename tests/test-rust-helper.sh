@@ -27,7 +27,7 @@ if "$HELPER" validate-relative "../escape" >/dev/null 2>&1; then
   exit 1
 fi
 
-printf '%s\n' 'version 3.1.0' \
+printf '%s\n' 'version 3.2.0' \
   'file ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad abc.txt' \
   > "$FIXTURE/manifest.txt"
 [ -z "$("$HELPER" changed-manifest "$FIXTURE/manifest.txt" "$FIXTURE")" ] || {
@@ -58,8 +58,20 @@ export UBS_RUST_HELPER
 }
 ubs_update_safe_destination "$ROOT" "scripts/ubs.py"
 
-# 전체 transactional updater도 Rust batch 비교·검증 경로로 통과해야 한다.
+# 전체 transactional updater는 실제 batch 경로와 legacy fallback을 각각 검증한다.
+UBS_RUST_HELPER="$HELPER" bash "$ROOT/tests/test-update.sh" >/dev/null
 UBS_RUST_HELPER="$HELPER" UBS_TEST_LEGACY_RUST_HELPER=true \
   bash "$ROOT/tests/test-update.sh" >/dev/null
+
+# 사용자 CARGO_TARGET_DIR 설정과 무관하게 host helper를 지정 staging 경로에 설치한다.
+UBS_RUST_BUILD_TARGET_DIR="$FIXTURE/custom-cargo-target" \
+  CARGO_TARGET_DIR="$FIXTURE/ignored-cargo-target" \
+bash "$ROOT/scripts/build-rust-helper.sh" >/dev/null
+"$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX" validate-relative "scripts/ubs.py"
+[ "$(ubs_update_sha256 "$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX")" = \
+  "$(tr -d '[:space:]' < "$ROOT/.ubs/bin/ubs-helper$HELPER_SUFFIX.sha256")" ] || {
+  echo "설치된 Rust helper 체크섬 sidecar가 일치하지 않습니다." >&2
+  exit 1
+}
 
 echo "Rust helper 테스트 통과"

@@ -4,6 +4,7 @@
 # 원격 manifest는 무결성 확인용이며 별도의 서명 체계를 대체하지 않는다.
 
 UBS_UPDATE_DEFAULT_BASE_URL="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
+UBS_UPDATE_RELEASE_ROOT="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
 
 ubs_update_allowed_path() {
   case "$1" in
@@ -155,7 +156,7 @@ ubs_update_restore() {
 
 ubs_run_update() {
   local root="$1" check_only="$2" dry_run="$3"
-  local base_url manifest_url temp_dir manifest remote_version="" seen=""
+  local base_url payload_base_url manifest_url temp_dir manifest remote_version="" seen=""
   local kind value relative extra expected actual local_version changed_count=0
   local required timestamp backup_dir destination install_tmp mode version_order lock_dir i changed_file helper_dir root_helper_dir
   local rust_batch=false rust_source_changed=false
@@ -237,6 +238,11 @@ ubs_run_update() {
     rm -rf "$temp_dir"
     return 1
   fi
+  payload_base_url="$base_url"
+  if [ "$base_url" = "$UBS_UPDATE_DEFAULT_BASE_URL" ] && \
+     [ "${UBS_UPDATE_USE_RELEASE_TAGS:-true}" = true ]; then
+    payload_base_url="$UBS_UPDATE_RELEASE_ROOT/v$remote_version"
+  fi
   while IFS= read -r required; do
     case " $seen " in
       *" $required "*) ;;
@@ -270,6 +276,13 @@ ubs_run_update() {
       rust_batch=true
       while IFS= read -r relative; do
         [ -n "$relative" ] || continue
+        case " ${paths[*]} " in
+          *" $relative "*) ;;
+          *) echo "Rust helper가 manifest 밖 경로를 반환했습니다: $relative" >&2; rm -rf "$temp_dir"; return 1 ;;
+        esac
+        case " ${changed_paths[*]} " in
+          *" $relative "*) echo "Rust helper가 중복 경로를 반환했습니다: $relative" >&2; rm -rf "$temp_dir"; return 1 ;;
+        esac
         changed_paths+=("$relative")
         changed_count=$((changed_count + 1))
       done < "$changed_file"
@@ -336,7 +349,7 @@ ubs_run_update() {
       rm -rf "$temp_dir"
       return 1
     fi
-    if ! ubs_update_fetch "$base_url/$relative" "$temp_dir/stage/$relative"; then
+    if ! ubs_update_fetch "$payload_base_url/$relative" "$temp_dir/stage/$relative"; then
       echo "파일 다운로드 실패: $relative" >&2
       rm -rf "$temp_dir"
       return 1
@@ -365,6 +378,11 @@ ubs_run_update() {
     return 1
   fi
   for relative in "${changed_paths[@]}"; do
+    if ! ubs_update_safe_destination "$root" "$relative"; then
+      echo "백업 직전 경로 검증 실패: $relative" >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
     if [ -e "$root/$relative" ]; then
       if ! mkdir -p "$backup_dir/$(dirname "$relative")" || \
          ! cp -p "$root/$relative" "$backup_dir/$relative"; then
@@ -376,6 +394,12 @@ ubs_run_update() {
   done
 
   for relative in "${changed_paths[@]}"; do
+    if ! ubs_update_safe_destination "$root" "$relative"; then
+      echo "교체 직전 경로 검증 실패: $relative — 적용된 파일을 복원합니다." >&2
+      ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
+      rm -rf "$temp_dir"
+      return 1
+    fi
     destination="$root/$relative"
     if ! mkdir -p "$(dirname "$destination")"; then
       echo "대상 경로 생성 실패: $relative — 적용된 파일을 복원합니다." >&2

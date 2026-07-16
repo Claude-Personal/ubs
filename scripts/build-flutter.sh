@@ -20,36 +20,9 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="2.0.0"
-REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
-
 check_script_update() {
   [ "${UBS_ALLOW_SELF_UPDATE:-false}" = "true" ] || return 0
-  [ "${UBS_NON_INTERACTIVE:-false}" = "true" ] && return
-  local remote_version
-  remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/scripts/FLUTTER_VERSION" 2>/dev/null | tr -d '[:space:]')
-  [ -z "$remote_version" ] && return
-
-  local latest
-  latest=$(printf '%s\n%s\n' "$SCRIPT_VERSION" "$remote_version" | sort -V | tail -1)
-  [ "$latest" != "$remote_version" ] && return
-  [ "$remote_version" = "$SCRIPT_VERSION" ] && return
-
-  echo -e "${YELLOW}🔔 새 버전의 빌드 스크립트가 있습니다: ${SCRIPT_VERSION} → ${remote_version}${NC}"
-  read -p "지금 업데이트할까요? (Y/n): " DO_UPDATE
-  if [[ "$DO_UPDATE" =~ ^[Nn]$ ]]; then
-    return
-  fi
-
-  if curl -fsSL --max-time 5 "$REPO_RAW/scripts/build-flutter.sh" -o "$0.new"; then
-    chmod +x "$0.new"
-    mv "$0.new" "$0"
-    echo -e "${GREEN}✅ 업데이트 완료 (${remote_version}). 스크립트를 다시 실행합니다...${NC}"
-    exec "$0" "$@"
-  else
-    echo -e "${RED}⚠️  업데이트 다운로드 실패, 기존 버전(${SCRIPT_VERSION})으로 계속합니다.${NC}"
-    rm -f "$0.new"
-  fi
+  echo -e "${YELLOW}UBS_ALLOW_SELF_UPDATE는 폐기됐습니다. 검증된 중앙 명령을 사용하세요: ./build.sh update${NC}" >&2
 }
 
 check_script_update "$@"

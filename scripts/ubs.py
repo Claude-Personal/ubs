@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -37,6 +38,10 @@ GRADLE_NAMES = {"build.gradle", "build.gradle.kts"}
 NODE_LOCKS = (
     "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
     "package-lock.json", "npm-shrinkwrap.json",
+)
+NODE_CONFIGS = (
+    ".npmrc", ".yarnrc", ".yarnrc.yml", "pnpm-workspace.yaml",
+    "pnpmfile.cjs", ".pnpmfile.cjs", ".node-version", ".nvmrc",
 )
 MARKER_NAMES = {
     "pubspec.yaml", "tauri.conf.json", "settings.gradle",
@@ -144,6 +149,21 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def dotenv_value(path: Path, key: str) -> str:
+    for raw in read_text(path).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        candidate, value = line.split("=", 1)
+        if candidate.strip() != key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value
+    return ""
+
+
 def gradle_files(directory: Path, max_depth: int = 3) -> List[Path]:
     files: List[Path] = []
     base_depth = len(directory.parts)
@@ -227,29 +247,88 @@ def read_package(directory: Path) -> dict:
         return {}
 
 
+def is_node_workspace(directory: Path) -> bool:
+    package = read_package(directory)
+    return bool(
+        any((directory / name).is_file() for name in NODE_LOCKS)
+        or (directory / "pnpm-workspace.yaml").is_file()
+        or isinstance(package.get("workspaces"), (list, dict))
+        or isinstance(package.get("packageManager"), str)
+    )
+
+
+@lru_cache(maxsize=512)
+def node_workspace_root(directory: Path) -> Path:
+    directory = directory.resolve()
+    fallback = directory
+    for current in (directory, *directory.parents):
+        if current != directory and is_node_workspace(current):
+            return current
+        if (current / ".git").exists():
+            break
+    return fallback
+
+
 def detect_node_package_manager(directory: Path) -> str:
-    declared = read_package(directory).get("packageManager", "")
+    workspace = node_workspace_root(directory)
+    declared = read_package(workspace).get("packageManager", "")
     if isinstance(declared, str):
         manager = declared.split("@", 1)[0]
         if manager in {"npm", "pnpm", "yarn", "bun"}:
             return manager
-    if (directory / "pnpm-lock.yaml").is_file():
+    if (workspace / "pnpm-lock.yaml").is_file():
         return "pnpm"
-    if (directory / "yarn.lock").is_file():
+    if (workspace / "yarn.lock").is_file():
         return "yarn"
-    if (directory / "bun.lock").is_file() or (directory / "bun.lockb").is_file():
+    if (workspace / "bun.lock").is_file() or (workspace / "bun.lockb").is_file():
         return "bun"
     return "npm"
 
 
-def dependency_digest(directory: Path, manager: str) -> str:
-    digest = hashlib.sha256()
-    digest.update(manager.encode())
-    for name in ("package.json", *NODE_LOCKS):
-        path = directory / name
+def command_version(command: str, environment: Dict[str, str]) -> str:
+    executable = shutil.which(command, path=environment.get("PATH"))
+    if not executable:
+        return "missing"
+    try:
+        result = subprocess.run(
+            [executable, "--version"], env=environment, check=False,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return result.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def dependency_inputs(workspace: Path) -> List[Path]:
+    inputs = []
+    for name in ("package.json", *NODE_LOCKS, *NODE_CONFIGS):
+        path = workspace / name
         if path.is_file():
-            digest.update(name.encode())
-            digest.update(path.read_bytes())
+            inputs.append(path)
+    for pattern in ("**/package.json", "patches/**/*", ".yarn/patches/**/*"):
+        for path in workspace.glob(pattern):
+            if path.is_file() and not any(part in EXCLUDED_DIRS for part in path.relative_to(workspace).parts):
+                inputs.append(path)
+    return sorted(set(inputs), key=lambda path: path.as_posix())
+
+
+def dependency_digest(
+    workspace: Path, manager: str, environment: Optional[Dict[str, str]] = None,
+) -> str:
+    environment = environment or os.environ.copy()
+    digest = hashlib.sha256()
+    runtime = {
+        "manager": manager,
+        "manager_version": command_version(manager, environment),
+        "node_version": command_version("node", environment),
+        "platform": platform.system(),
+        "machine": platform.machine(),
+    }
+    digest.update(json.dumps(runtime, sort_keys=True).encode())
+    for path in dependency_inputs(workspace):
+        digest.update(path.relative_to(workspace).as_posix().encode())
+        digest.update(path.read_bytes())
     return digest.hexdigest()
 
 
@@ -271,7 +350,7 @@ def run_command(command: Sequence[str], directory: Path, environment: Dict[str, 
     return subprocess.run(list(command), cwd=directory, env=environment, check=False).returncode
 
 
-def install_node_dependencies(directory: Path, manager: str, environment: Dict[str, str]) -> int:
+def install_node_dependencies(workspace: Path, manager: str, environment: Dict[str, str]) -> int:
     if environment.get("UBS_SKIP_INSTALL", "false") == "true":
         print(f"{CYAN}Node 의존성 설치를 건너뜁니다 (UBS_SKIP_INSTALL=true).{NC}")
         return 0
@@ -279,12 +358,12 @@ def install_node_dependencies(directory: Path, manager: str, environment: Dict[s
     if mode not in {"auto", "always"}:
         eprint(f"{RED}UBS_INSTALL_MODE은 auto 또는 always여야 합니다: {mode}{NC}")
         return 2
-    stamp = directory / "node_modules" / ".ubs-install-sha256"
-    expected = dependency_digest(directory, manager)
+    stamp = workspace / "node_modules" / ".ubs-install-sha256"
+    expected = dependency_digest(workspace, manager, environment)
     if mode == "auto" and read_text(stamp).strip() == expected:
         print(f"{CYAN}의존성 입력이 변경되지 않아 {manager} install을 생략합니다.{NC}")
         return 0
-    status = run_command(node_install_command(directory, manager), directory, environment)
+    status = run_command(node_install_command(workspace, manager), workspace, environment)
     if status == 0:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(expected + "\n", encoding="utf-8")
@@ -292,6 +371,7 @@ def install_node_dependencies(directory: Path, manager: str, environment: Dict[s
 
 
 def run_node_adapter(directory: Path, environment: Dict[str, str]) -> int:
+    workspace = node_workspace_root(directory)
     manager = detect_node_package_manager(directory)
     if shutil.which(manager, path=environment.get("PATH")) is None:
         eprint(f"{RED}{manager} 패키지 매니저가 필요합니다.{NC}")
@@ -299,7 +379,9 @@ def run_node_adapter(directory: Path, environment: Dict[str, str]) -> int:
     script = environment.get("UBS_NODE_BUILD_SCRIPT", "build")
     started = time.monotonic()
     print(f"{CYAN}Node 프로젝트 빌드 ({manager}, script={script}){NC}")
-    status = install_node_dependencies(directory, manager, environment)
+    if workspace != directory:
+        print(f"{CYAN}Node workspace root: {workspace}{NC}")
+    status = install_node_dependencies(workspace, manager, environment)
     if status == 0:
         status = run_command([manager, "run", script], directory, environment)
     if status == 0:
@@ -318,22 +400,41 @@ def gradle_command(directory: Path) -> Optional[List[str]]:
     return [executable] if executable else None
 
 
+def split_cli_arguments(value: str, windows: Optional[bool] = None) -> List[str]:
+    if not value:
+        return []
+    windows = os.name == "nt" if windows is None else windows
+    arguments = shlex.split(value, posix=not windows)
+    if windows:
+        return [
+            argument[1:-1]
+            if len(argument) >= 2 and argument[0] == argument[-1] and argument[0] in "\"'"
+            else argument
+            for argument in arguments
+        ]
+    return arguments
+
+
+def resolved_gradle_arguments(kind: str, directory: Path, environment: Dict[str, str]) -> List[str]:
+    task_value = environment.get("UBS_GRADLE_TASK", "")
+    if task_value:
+        tasks = split_cli_arguments(task_value)
+    elif kind == "android" and has_gradle_plugin(directory, "com.android.application"):
+        tasks = ["bundleRelease"]
+    else:
+        tasks = ["build"]
+    flags = split_cli_arguments(environment.get("UBS_GRADLE_FLAGS", ""))
+    if environment.get("UBS_GRADLE_OPTIMIZE", "false") == "true":
+        flags = ["--build-cache", "--parallel", *flags]
+    return [*tasks, *flags]
+
+
 def run_gradle_adapter(kind: str, directory: Path, environment: Dict[str, str]) -> int:
     command = gradle_command(directory)
     if not command:
         eprint(f"{RED}Gradle Wrapper 또는 gradle 명령이 필요합니다.{NC}")
         return 1
-    task_value = environment.get("UBS_GRADLE_TASK", "")
-    if task_value:
-        tasks = shlex.split(task_value)
-    elif kind == "android" and has_gradle_plugin(directory, "com.android.application"):
-        tasks = ["bundleRelease"]
-    else:
-        tasks = ["build"]
-    flags = shlex.split(environment.get("UBS_GRADLE_FLAGS", ""))
-    if environment.get("UBS_GRADLE_OPTIMIZE", "false") == "true":
-        flags = ["--build-cache", "--parallel", *flags]
-    full_command = [*command, *tasks, *flags]
+    full_command = [*command, *resolved_gradle_arguments(kind, directory, environment)]
     started = time.monotonic()
     print(f"{CYAN}Gradle 프로젝트 빌드: {' '.join(full_command)}{NC}")
     status = run_command(full_command, directory, environment)
@@ -404,6 +505,30 @@ def is_flutter_managed_child(candidate: Path, root: Path) -> bool:
     return False
 
 
+def is_tauri_managed_node_child(candidate: Path, tauri_root: Path) -> bool:
+    if candidate == tauri_root or tauri_root not in candidate.parents:
+        return False
+    config_path = tauri_root / "src-tauri" / "tauri.conf.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    build = config.get("build")
+    if not isinstance(build, dict):
+        return False
+    frontend_dist = build.get("frontendDist")
+    if isinstance(frontend_dist, str) and "://" not in frontend_dist:
+        output = (config_path.parent / frontend_dist).resolve()
+        if candidate == output or candidate in output.parents:
+            return True
+    relative = candidate.relative_to(tauri_root).as_posix()
+    for key in ("beforeBuildCommand", "beforeDevCommand"):
+        command = build.get(key)
+        if isinstance(command, str) and relative in command:
+            return True
+    return False
+
+
 def scan_projects(root: Path) -> List[Project]:
     root = canonical_dir(root)
     candidates = set()
@@ -416,11 +541,20 @@ def scan_projects(root: Path) -> List[Project]:
             marker = current / name
             candidate = current.parent if marker.as_posix().endswith("/src-tauri/tauri.conf.json") else current
             candidates.add(candidate.resolve())
+    tauri_roots = {
+        candidate for candidate in candidates
+        if (candidate / "src-tauri" / "tauri.conf.json").is_file()
+    }
     projects = []
     for candidate in sorted(candidates, key=str):
         if is_flutter_managed_child(candidate, root):
             continue
         kind = detect_project_type(candidate)
+        if kind in {"react", "next", "node"} and any(
+            is_tauri_managed_node_child(candidate, tauri_root)
+            for tauri_root in tauri_roots
+        ):
+            continue
         if kind:
             projects.append(Project(kind, candidate))
     return projects
@@ -500,8 +634,19 @@ def audit_project(project: Project) -> List[dict]:
     return items
 
 
+def project_resource_root(project: Project) -> Path:
+    if project.type in {"react", "next", "node"}:
+        return node_workspace_root(project.path)
+    return project.path
+
+
 def plan_item(project: Project, options: Options) -> dict:
-    values: Dict[str, object] = {"version_bump": options.version_bump}
+    environment = os.environ.copy()
+    values: Dict[str, object] = {
+        "version_bump": options.version_bump,
+        "jobs": options.jobs,
+        "execution_group": str(project_resource_root(project)),
+    }
     if project.type == "flutter":
         values.update({
             "outputs": options.flutter_outputs,
@@ -510,17 +655,32 @@ def plan_item(project: Project, options: Options) -> dict:
             "skip_clean": options.skip_clean,
         })
     elif project.type == "tauri":
+        obfuscate = environment.get("TAURI_OBFUSCATE_JS", "") or dotenv_value(
+            project.path / ".env.macos", "TAURI_OBFUSCATE_JS"
+        )
         values.update({
             "package_mode": os.environ.get("UBS_TAURI_PACKAGE_MODE", "auto"),
             "skip_install": os.environ.get("UBS_SKIP_INSTALL", "false") == "true",
-            "obfuscate_js": os.environ.get("TAURI_OBFUSCATE_JS", "false") == "true",
+            "obfuscate_js": obfuscate == "true",
         })
     elif project.type in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
-        values["gradle_task"] = os.environ.get("UBS_GRADLE_TASK", "") or "auto"
-    else:
+        gradle_arguments = resolved_gradle_arguments(project.type, project.path, environment)
         values.update({
-            "build_script": os.environ.get("UBS_NODE_BUILD_SCRIPT", "build"),
-            "skip_install": os.environ.get("UBS_SKIP_INSTALL", "false") == "true",
+            "gradle_task": gradle_arguments[0],
+            "gradle_arguments": gradle_arguments,
+            "gradle_optimize": environment.get("UBS_GRADLE_OPTIMIZE", "false") == "true",
+            "gradle_flags": split_cli_arguments(environment.get("UBS_GRADLE_FLAGS", "")),
+        })
+    else:
+        workspace = node_workspace_root(project.path)
+        manager = detect_node_package_manager(project.path)
+        values.update({
+            "build_script": environment.get("UBS_NODE_BUILD_SCRIPT", "build"),
+            "skip_install": environment.get("UBS_SKIP_INSTALL", "false") == "true",
+            "install_mode": environment.get("UBS_INSTALL_MODE", "auto"),
+            "package_manager": manager,
+            "workspace_root": str(workspace),
+            "install_command": node_install_command(workspace, manager),
         })
     return {"type": project.type, "path": str(project.path),
             "adapter": ADAPTERS[project.type], "options": values}
@@ -584,7 +744,10 @@ class BuildReport:
 def parse_options(argv: Sequence[str]) -> Options:
     args = list(argv)
     options = Options()
-    if args and args[0] in {"detect", "list", "audit", "plan", "update", "build", "help", "-h", "--help"}:
+    if args and args[0] in {
+        "detect", "list", "audit", "plan", "update", "build",
+        "node-adapter", "gradle-adapter", "help", "-h", "--help",
+    }:
         first = args.pop(0)
         options.command = "detect" if first == "list" else ("help" if first in {"help", "-h", "--help"} else first)
     index = 0
@@ -657,6 +820,56 @@ def selected_projects(options: Options, root: Path) -> List[Project]:
     return [project for project in projects if not options.type_filter or project.type == options.type_filter]
 
 
+def projects_conflict(left: Project, right: Project) -> bool:
+    left_root = project_resource_root(left)
+    right_root = project_resource_root(right)
+    return bool(
+        left_root == right_root
+        or left.path in right.path.parents
+        or right.path in left.path.parents
+        or left_root in right_root.parents
+        or right_root in left_root.parents
+    )
+
+
+def project_groups(projects: Sequence[Project]) -> List[List[Project]]:
+    parents = list(range(len(projects)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for left in range(len(projects)):
+        for right in range(left + 1, len(projects)):
+            if projects_conflict(projects[left], projects[right]):
+                union(left, right)
+    groups: Dict[int, List[Project]] = {}
+    for index, project in enumerate(projects):
+        groups.setdefault(find(index), []).append(project)
+    return list(groups.values())
+
+
+def resolved_plan_items(projects: Sequence[Project], options: Options) -> List[dict]:
+    group_ids: Dict[Project, str] = {}
+    for index, group in enumerate(project_groups(projects), 1):
+        group_id = f"group-{index}:{group[0].path}"
+        for project in group:
+            group_ids[project] = group_id
+    items = []
+    for project in projects:
+        item = plan_item(project, options)
+        item["options"]["execution_group"] = group_ids[project]
+        items.append(item)
+    return items
+
+
 def run_project(project: Project, options: Options, report: BuildReport) -> int:
     adapter_relative = ADAPTERS.get(project.type)
     if not adapter_relative:
@@ -711,22 +924,32 @@ def execute_projects(projects: Sequence[Project], options: Options, report: Buil
                 if options.fail_fast:
                     break
     else:
-        workers = min(options.jobs, len(projects))
-        print(f"{CYAN}독립 프로젝트 {len(projects)}개를 최대 {workers}개씩 병렬 실행합니다.{NC}")
+        groups = project_groups(projects)
+        workers = min(options.jobs, len(groups))
+        serialized = sum(1 for group in groups if len(group) > 1)
+        print(
+            f"{CYAN}프로젝트 {len(projects)}개를 충돌 없는 {len(groups)}개 그룹으로 나눠 "
+            f"최대 {workers}개씩 병렬 실행합니다 (직렬 그룹 {serialized}개).{NC}"
+        )
+
+        def run_group(group: Sequence[Project]) -> List[tuple[Project, int]]:
+            return [(project, run_project(project, options, report)) for project in group]
+
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ubs-build") as executor:
-            futures = {executor.submit(run_project, project, options, report): project for project in projects}
+            futures = {executor.submit(run_group, group): group for group in groups}
             for future in as_completed(futures):
-                project = futures[future]
                 try:
-                    status = future.result()
-                except (OSError, ValueError) as error:
-                    eprint(f"{RED}✗ 빌드 실행 오류: [{project.type}] {error}{NC}")
-                    status = 1
-                if status == 0:
-                    succeeded += 1
-                else:
-                    failed += 1
-                    eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+                    results = future.result()
+                except Exception as error:
+                    group = futures[future]
+                    eprint(f"{RED}✗ 빌드 그룹 실행 오류: {error}{NC}")
+                    results = [(project, 1) for project in group]
+                for project, status in results:
+                    if status == 0:
+                        succeeded += 1
+                    else:
+                        failed += 1
+                        eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
     print("------------------------------------------------------------")
     print(f"전체: {succeeded + failed}  {GREEN}성공: {succeeded}{NC}  {RED}실패: {failed}{NC}")
     return 0 if failed == 0 else 1
@@ -739,8 +962,16 @@ def run_update(options: Options) -> int:
         return 1
     environment = os.environ.copy()
     helper = RUNTIME_ROOT / ".ubs/bin" / ("ubs-helper.exe" if os.name == "nt" else "ubs-helper")
-    if helper.is_file() and os.access(helper, os.X_OK):
-        environment.setdefault("UBS_RUST_HELPER", str(helper))
+    helper_checksum = helper.with_name(helper.name + ".sha256")
+    helper_parents_safe = not any(
+        path.is_symlink()
+        for path in (RUNTIME_ROOT / ".ubs", RUNTIME_ROOT / ".ubs/bin", helper, helper_checksum)
+    )
+    if helper_parents_safe and helper.is_file() and helper_checksum.is_file() and os.access(helper, os.X_OK):
+        expected = read_text(helper_checksum).strip().lower()
+        actual = hashlib.sha256(helper.read_bytes()).hexdigest()
+        if re.fullmatch(r"[0-9a-f]{64}", expected) and actual == expected:
+            environment.setdefault("UBS_RUST_HELPER", str(helper))
     if options.update_prune_days is not None:
         if options.update_check or options.dry_run:
             eprint("--prune-backups는 --check/--dry-run과 함께 사용할 수 없습니다.")
@@ -785,6 +1016,15 @@ def main(argv: Sequence[str]) -> int:
             return run_update(options)
         validate_options(options)
         root = canonical_dir(options.root)
+        if options.command in {"node-adapter", "gradle-adapter"}:
+            environment = os.environ.copy()
+            if options.command == "node-adapter":
+                return run_node_adapter(root, environment)
+            detected = detect_project_type(root)
+            kind = os.environ.get("UBS_PROJECT_TYPE", detected or "gradle")
+            if kind not in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
+                kind = "gradle"
+            return run_gradle_adapter(kind, root, environment)
         if options.command == "detect":
             projects = projects_for_root(root)
             if options.json_output:
@@ -808,7 +1048,7 @@ def main(argv: Sequence[str]) -> int:
             return 0 if audits else 1
         if options.command == "plan":
             if options.json_output:
-                print(json.dumps([plan_item(project, options) for project in projects], ensure_ascii=False, indent=2))
+                print(json.dumps(resolved_plan_items(projects, options), ensure_ascii=False, indent=2))
             else:
                 report = BuildReport(None)
                 for project in projects: run_project(project, Options(**{**options.__dict__, "dry_run": True}), report)

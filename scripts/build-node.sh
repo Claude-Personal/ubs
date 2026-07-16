@@ -9,4 +9,4 @@ RUNTIME_ROOT="${UBS_RUNTIME_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pw
   echo "Python core를 찾을 수 없습니다: $RUNTIME_ROOT/scripts/ubs.py" >&2
   exit 1
 }
-exec python3 "$RUNTIME_ROOT/scripts/ubs.py" build --project "$PWD"
+exec python3 "$RUNTIME_ROOT/scripts/ubs.py" node-adapter "$PWD"

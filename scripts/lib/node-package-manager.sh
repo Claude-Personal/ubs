@@ -4,9 +4,26 @@
 
 detect_node_package_manager() {
   local declared=""
+  local current="$PWD"
 
-  if command -v python3 >/dev/null 2>&1 && [ -f package.json ]; then
-    declared=$(python3 - package.json <<'PY'
+  NODE_WORKSPACE_ROOT="$PWD"
+  while [ "$current" != "/" ]; do
+    if [ "$current" != "$PWD" ] && {
+      [ -f "$current/pnpm-lock.yaml" ] || [ -f "$current/yarn.lock" ] || \
+      [ -f "$current/package-lock.json" ] || [ -f "$current/npm-shrinkwrap.json" ] || \
+      [ -f "$current/bun.lock" ] || [ -f "$current/bun.lockb" ] || \
+      [ -f "$current/pnpm-workspace.yaml" ] || \
+      { [ -f "$current/package.json" ] && grep -Eqs '"(packageManager|workspaces)"[[:space:]]*:' "$current/package.json"; };
+    }; then
+      NODE_WORKSPACE_ROOT="$current"
+      break
+    fi
+    [ -e "$current/.git" ] && break
+    current="$(dirname "$current")"
+  done
+
+  if command -v python3 >/dev/null 2>&1 && [ -f "$NODE_WORKSPACE_ROOT/package.json" ]; then
+    declared=$(python3 - "$NODE_WORKSPACE_ROOT/package.json" <<'PY'
 import json, sys
 try:
     value = json.load(open(sys.argv[1], encoding="utf-8")).get("packageManager", "")
@@ -20,9 +37,9 @@ PY
   case "$declared" in
     npm|pnpm|yarn|bun) NODE_PM="$declared" ;;
     *)
-      if [ -f pnpm-lock.yaml ]; then NODE_PM="pnpm"
-      elif [ -f yarn.lock ]; then NODE_PM="yarn"
-      elif [ -f bun.lockb ] || [ -f bun.lock ]; then NODE_PM="bun"
+      if [ -f "$NODE_WORKSPACE_ROOT/pnpm-lock.yaml" ]; then NODE_PM="pnpm"
+      elif [ -f "$NODE_WORKSPACE_ROOT/yarn.lock" ]; then NODE_PM="yarn"
+      elif [ -f "$NODE_WORKSPACE_ROOT/bun.lockb" ] || [ -f "$NODE_WORKSPACE_ROOT/bun.lock" ]; then NODE_PM="bun"
       else NODE_PM="npm"
       fi
       ;;
@@ -35,6 +52,8 @@ PY
 }
 
 install_node_dependencies() {
+  (
+  cd "$NODE_WORKSPACE_ROOT"
   case "$NODE_PM" in
     pnpm)
       if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile
@@ -60,6 +79,7 @@ install_node_dependencies() {
       fi
       ;;
   esac
+  )
 }
 
 run_node_script() {
