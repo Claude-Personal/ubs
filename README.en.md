@@ -394,8 +394,6 @@ Tests use temporary fixtures and mocked ecosystem commands. Real SDK builds, App
 - Automatic folder opening uses the same artifact rules, so custom output paths may need manual navigation.
 - The update manifest supports external hash pinning but not an independent signature/transparency log.
 
-## License and external code
+## License
 
-MIT License — Copyright © 2026 kimdzhekhon. If this work was first created and published in 2026, `2026` is the appropriate notice; use `2024–2026` only when an earlier 2024 work or publication can be substantiated. See the [U.S. Copyright Office notice guidance](https://www.copyright.gov/circs/circ03.pdf), the [OSI MIT text](https://opensource.org/license/MIT), and [LICENSE](LICENSE).
-
-Ideas, public APIs, and general design patterns may be studied, but do not disguise copied code or prose as a collection of small fragments. Before incorporating implementation text, verify license compatibility and preserve every required copyright, license, notice, and attribution. Do not mix code with materially different obligations such as GPL/AGPL without a deliberate review. The output-folder implementation in this change was written independently for this repository.
+MIT License — Copyright © 2026 kimdzhekhon
