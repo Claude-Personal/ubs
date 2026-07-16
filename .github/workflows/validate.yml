@@ -54,6 +54,28 @@ jobs:
             exit 1
           fi
 
+      - name: Validate multilingual documentation and diagrams
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          documents = [
+              Path("README.md"),
+              Path("README.en.md"),
+              Path("README.ja.md"),
+              Path("README.zh-CN.md"),
+          ]
+          language_links = [str(path) for path in documents]
+          for document in documents:
+              text = document.read_text(encoding="utf-8")
+              assert text.strip(), f"empty document: {document}"
+              for link in language_links:
+                  assert f"]({link})" in text, f"{document} is missing language link {link}"
+              assert text.count("```mermaid") >= 6, f"{document} needs at least six diagrams"
+              assert text.count("```") % 2 == 0, f"unbalanced code fences: {document}"
+          print("multilingual README and Mermaid diagrams are valid")
+          PY
+
       - name: Validate AI skill metadata
         run: |
           python -m pip install --disable-pip-version-check PyYAML

@@ -1,0 +1,287 @@
+<div align="center">
+
+# Universal Build Script
+
+[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
+
+**只需一个 `./build.sh`，即可检测并构建 Flutter、Tauri、Android/Kotlin/Gradle、React、Next.js 和 Node；开发者、CI、AI 与 MCP 共用同一套规则。**
+
+[快速开始](#快速开始) · [架构](#架构与执行流程) · [命令](#主要命令) · [安全更新](#安全的运行时更新) · [已知限制](#已知限制)
+
+</div>
+
+## 概览
+
+脚本会判断当前目录是单项目还是 monorepo，检测可构建项目，排除嵌套重复项，并把每个项目交给对应的生态适配器。
+
+| 维度 | 默认行为 |
+|---|---|
+| 交互 | 非交互，适合 CI |
+| 版本 | 未明确要求时保持不变 |
+| Monorepo | 按路径顺序串行构建 |
+| Flutter | macOS 默认 AAB+IPA，其他系统默认 AAB |
+| Tauri | 生成系统原生包；macOS 签名配置完整时生成 `.pkg` |
+| 失败 | 默认继续其他项目，最后汇总失败 |
+| UBS 更新 | 与普通构建完全分离 |
+
+## 快速开始
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
+
+./build.sh detect
+./build.sh audit
+./build.sh plan --json
+./build.sh
+```
+
+构建指定产物并生成结构化报告：
+
+```bash
+./build.sh \
+  --flutter-outputs appbundle,web \
+  --version-bump none \
+  --report-json .ubs/build-report.json
+```
+
+## 架构与执行流程
+
+```mermaid
+flowchart TD
+    U["开发者 / CI / AI / MCP"] --> B["build.sh 统一入口"]
+    B --> D["检测项目并去重"]
+    D --> P["校验参数并生成计划"]
+    P --> A{"生态适配器"}
+    A -->|"Tauri"| T["系统原生包 / macOS 签名 pkg"]
+    A -->|"Flutter"| F["AAB / APK / IPA / Web"]
+    A -->|"Gradle"| G["Android / Kotlin / KMP"]
+    A -->|"Node"| N["React / Next / Node"]
+    T --> R["退出状态与产物报告"]
+    F --> R
+    G --> R
+    N --> R
+```
+
+### 检测优先级
+
+```mermaid
+flowchart LR
+    R["目录"] --> T{"存在 Tauri 配置?"}
+    T -->|"是"| TA["注册 Tauri，排除内部 frontend"]
+    T -->|"否"| F{"Flutter pubspec?"}
+    F -->|"是"| FL["注册 Flutter，排除平台子目录"]
+    F -->|"否"| G{"Gradle 配置?"}
+    G -->|"是"| GR["分类 Android / KMP / Kotlin / Gradle"]
+    G -->|"否"| N{"package.json + scripts.build?"}
+    N -->|"是"| NO["分类 Next / React / Node"]
+    N -->|"否"| S["扫描子目录"]
+```
+
+优先级为 **Tauri → Flutter → Gradle → Node**。因此 Tauri 内的 React 前端、Flutter 内的 Android/iOS 目录不会被重复识别为独立项目。
+
+### 语言职责边界
+
+```mermaid
+flowchart TB
+    E["./build.sh"] --> S["Bash：参数、进程、适配器"]
+    S --> P["Python 3：JSON、plist、安全解析、报告"]
+    S --> F["Flutter CLI"]
+    S --> T["Node + Tauri/Cargo"]
+    S --> G["Gradle"]
+    P --> J["机器可读 JSON"]
+    F --> A["构建产物"]
+    T --> A
+    G --> A
+```
+
+项目并非强制使用纯 Shell。Bash 保持轻量兼容入口，Python 负责结构化数据，真正的编译和优化由各生态官方 CLI 完成。
+
+### Monorepo 失败策略
+
+```mermaid
+stateDiagram-v2
+    [*] --> Detect
+    Detect --> Select
+    Select --> Build
+    Build --> Success: exit 0
+    Build --> Failed: non-zero
+    Success --> More
+    Failed --> Stop: fail-fast
+    Failed --> More: 默认
+    More --> Build: 还有项目
+    More --> Aggregate: 已完成
+    Stop --> Aggregate
+    Aggregate --> [*]
+```
+
+## 支持范围
+
+| 类型 | 检测条件 | 默认构建 | 常见产物 |
+|---|---|---|---|
+| Tauri 2 | `src-tauri/tauri.conf.json` | `tauri build` | 系统原生包；可选 macOS `.pkg` |
+| Flutter | `pubspec.yaml` 声明 Flutter SDK | 所选 release 输出 | AAB、分 ABI APK、IPA、Web、symbols |
+| Android | Android Gradle plugin | app 使用 `bundleRelease` | 由 Gradle 项目决定 |
+| Kotlin/KMP/Gradle | Gradle plugin 与 settings | `build` | JAR 或目标平台产物 |
+| Next/React/Node | 字符串形式的 `scripts.build` | 包管理器 build script | `.next`、`dist`、`build` 等 |
+
+递归扫描会排除 `.git`、`node_modules`、`build`、`dist`、`target`、`.gradle`、`.dart_tool` 与 `.next`。
+
+## 主要命令
+
+```bash
+# 只读检测、审计、计划
+./build.sh detect --json /workspace
+./build.sh audit --json /workspace
+./build.sh plan --json /workspace
+
+# 单项目或筛选后的 monorepo
+./build.sh build --project apps/mobile
+./build.sh build --all --type flutter
+
+# 明确指定 Flutter 产物
+./build.sh --flutter-outputs appbundle,apk,ipa,web
+
+# 首次失败即停止
+./build.sh --fail-fast
+
+# 结构化构建报告
+./build.sh --report-json .ubs/build-report.json
+```
+
+| 选项 | 含义 |
+|---|---|
+| `--version-bump none|build|patch|minor|major` | 应用版本策略 |
+| `--flutter-outputs auto|LIST` | AAB/APK/IPA/Web 的组合 |
+| `--project PATH` | 只构建一个已检测项目 |
+| `--all --type TYPE` | 按类型筛选 monorepo |
+| `--clean` / `--skip-clean` | Flutter 缓存策略 |
+| `--report-json PATH` | 保存项目状态、退出码和产物路径 |
+
+退出码 `0` 表示全部成功，`1` 表示检测/构建失败或没有匹配项目，`2` 表示参数无效。
+
+## Flutter 产物流
+
+```mermaid
+flowchart TD
+    S["选择输出"] --> A{"auto?"}
+    A -->|"macOS"| MI["AAB + IPA"]
+    A -->|"其他系统"| AN["AAB"]
+    A -->|"明确列表"| E["任意 AAB / APK / IPA / Web 组合"]
+    MI --> I{"包含 IPA?"}
+    E --> I
+    I -->|"是"| P{"项目自带 ExportOptions.plist?"}
+    P -->|"是"| O["使用项目策略"]
+    P -->|"否"| T["使用受管理的通用模板"]
+    O --> B["release 构建 + 符号分离"]
+    T --> B
+    AN --> B
+```
+
+原生 Flutter 产物使用 release、obfuscation 与 split debug info。Web 使用 release 优化与 tree shaking，但不适用原生 Dart 混淆。
+
+## Tauri 平台流
+
+```mermaid
+flowchart TD
+    B["tauri build"] --> O{"宿主系统"}
+    O -->|"Windows"| W["MSI / NSIS 等项目配置包"]
+    O -->|"Linux"| L["deb / AppImage / rpm 等项目配置包"]
+    O -->|"macOS"| M{"package mode"}
+    M -->|"unsigned"| A["默认 .app"]
+    M -->|"auto"| C{"Apple 签名输入完整?"}
+    M -->|"signed"| V{"Apple 签名输入完整?"}
+    C -->|"否"| A
+    C -->|"是"| P["codesign 校验 + 签名 .pkg"]
+    V -->|"是"| P
+    V -->|"否"| E["打包前明确失败"]
+```
+
+包管理器按 `packageManager`、pnpm/Yarn/Bun lock 文件、npm 的顺序选择，并在支持时使用 frozen/immutable 安装。
+
+## 安全的运行时更新
+
+普通构建不会下载 UBS 代码。更新必须显式执行：
+
+```bash
+./build.sh update --check
+./build.sh update --dry-run
+./build.sh update
+./build.sh update --check --json
+./build.sh update --prune-backups 30
+```
+
+```mermaid
+sequenceDiagram
+    participant C as 调用方
+    participant U as 更新器
+    participant H as HTTPS 源
+    participant B as 备份
+    participant F as 受管理文件
+    C->>U: check / dry-run / apply
+    U->>H: 获取 manifest
+    U->>U: 校验 SemVer、白名单、重复与缺失路径
+    U->>F: 比较本地 SHA-256
+    alt check / dry-run
+        U-->>C: 只返回变更列表
+    else apply
+        U->>H: 下载全部变更文件
+        U->>U: 修改前校验全部 SHA-256
+        U->>B: 保存旧文件
+        U->>F: 临时文件 + rename
+        alt 部分失败
+            B-->>F: 回滚已替换文件
+        end
+    end
+```
+
+更新器阻止路径穿越、符号链接目标、并发写入以及未授权降级。高保证 CI 可设置 `UBS_UPDATE_MANIFEST_SHA256` 固定 manifest，但它不能替代独立签名或透明日志。
+
+## 隐私、密钥与产物
+
+`.gitignore` 默认排除真实环境文件、Apple/Android 签名材料、服务配置、依赖缓存和生成包。example 文件只能保存占位符。
+
+```mermaid
+flowchart LR
+    D["开发机器"] --> E["占位符示例"]
+    D --> S["密钥与签名输入"]
+    D --> O["生成产物"]
+    E -->|"允许跟踪"| G["Git / PR"]
+    S -->|"忽略"| L["本地或 secret store"]
+    O -->|"忽略"| L
+    G --> C["CI 隐私规则检查"]
+```
+
+Ignore 规则不会删除已跟踪文件或提交作者元数据。如果凭据曾泄漏，应先撤销并重新签发，再决定是否重写历史。
+
+## AI 与 MCP
+
+仓库包含 [`skills/universal-build`](skills/universal-build/SKILL.md)，安全执行顺序为：
+
+```text
+detect --json → audit --json → plan --json → 用户明确授权 → build --report-json
+```
+
+MCP 应暴露受限的类型化工具，而不是任意 Shell。必须限制 workspace root 和枚举参数，保留 stdout/stderr、退出码与超时，并拒绝自由格式签名密钥输入。
+
+## 验证
+
+```bash
+bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+bash tests/test-detection.sh
+bash tests/test-update.sh
+```
+
+测试使用临时 fixture 和模拟 CLI。真实 SDK 构建、签名以及产物级逆向验证仍需在具体项目环境中执行。
+
+## 已知限制
+
+- 项目按路径顺序串行执行，尚无依赖图调度和并行构建。
+- 不检测仅使用 Xcode 的原生 iOS 项目。
+- Gradle flavor、自定义 release task、KMP 发布 task 可能需要覆盖配置。
+- Tauri JS 混淆假定前端输出目录为 `dist/`。
+- 产物报告只搜索已知的默认输出路径。
+- 更新 manifest 支持外部 hash pin，但没有独立签名或透明日志。
+
+## 许可证
+
+MIT License — Copyright © 2024–2026 kimdzhekhon。详见 [LICENSE](LICENSE)。
