@@ -243,11 +243,16 @@ grep -Fqx 'version: 1.0.0+1' "$FIXTURE/apps/mobile/pubspec.yaml" || {
   exit 1
 }
 
+# Tauri 어댑터는 macOS 전용이므로 CI 운영체제와 무관하게 macOS 분기를 검증한다.
+printf '%s\n' '#!/usr/bin/env bash' 'echo Darwin' > "$FIXTURE/bin/uname"
+chmod +x "$FIXTURE/bin/uname"
+
 printf '%s\n' \
   'TAURI_SIGN_IDENTITY="$(touch should-not-exist)"' \
   'TAURI_INSTALLER_IDENTITY="Installer"' \
   > "$FIXTURE/apps/desktop/.env.macos"
-if UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
+if PATH="$FIXTURE/bin:$PATH" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
   bash -c 'cd "$1" && bash "$2"' _ \
   "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh" >/dev/null 2>&1; then
   echo "서명 파일이 없는 Tauri 테스트가 성공했습니다." >&2
