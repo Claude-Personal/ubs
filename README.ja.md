@@ -1,0 +1,277 @@
+<div align="center">
+
+# Universal Build Script
+
+[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
+
+**`./build.sh` 一つで Flutter・Tauri・Android/Kotlin/Gradle・React/Next/Node を検出し、人・CI・AI・MCP が同じ手順でビルドするオーケストレーター**
+
+[クイックスタート](#クイックスタート) · [構成](#構成と処理フロー) · [コマンド](#主なコマンド) · [安全な更新](#安全なランタイム更新) · [制限事項](#既知の制限事項)
+
+</div>
+
+## 概要
+
+現在のディレクトリが単一プロジェクトかモノレポかを判定し、ビルド可能なプロジェクトを検出して、重複する内部プロジェクトを除外したうえで適切なアダプターを実行します。
+
+| 観点 | 既定動作 |
+|---|---|
+| 実行 | 非対話・CI セーフ |
+| バージョン | 明示しない限り変更しない |
+| モノレポ | パス順に逐次ビルド |
+| Flutter | macOS は AAB+IPA、その他は AAB |
+| Tauri | OS 標準バンドル、macOS 署名完備時は `.pkg` |
+| 失敗 | 他プロジェクトを続行し最後に集計 |
+| UBS 更新 | 通常ビルドとは完全に分離 |
+
+## クイックスタート
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
+
+./build.sh detect
+./build.sh audit
+./build.sh plan --json
+./build.sh
+```
+
+成果物レポートを含む例:
+
+```bash
+./build.sh \
+  --flutter-outputs appbundle,web \
+  --version-bump none \
+  --report-json .ubs/build-report.json
+```
+
+## 構成と処理フロー
+
+```mermaid
+flowchart TD
+    U["人 / CI / AI / MCP"] --> B["build.sh エントリーポイント"]
+    B --> D["プロジェクト検出・重複除外"]
+    D --> P["オプション検証・計画"]
+    P --> A{"アダプター"}
+    A -->|"Tauri"| T["OS バンドル / macOS 署名 pkg"]
+    A -->|"Flutter"| F["AAB / APK / IPA / Web"]
+    A -->|"Gradle"| G["Android / Kotlin / KMP"]
+    A -->|"Node"| N["React / Next / Node"]
+    T --> R["終了状態・成果物レポート"]
+    F --> R
+    G --> R
+    N --> R
+```
+
+### 検出優先順位
+
+```mermaid
+flowchart LR
+    R["ディレクトリ"] --> T{"Tauri 設定?"}
+    T -->|"はい"| TA["Tauri として登録し frontend 重複除外"]
+    T -->|"いいえ"| F{"Flutter pubspec?"}
+    F -->|"はい"| FL["Flutter として登録し platform 重複除外"]
+    F -->|"いいえ"| G{"Gradle 設定?"}
+    G -->|"はい"| GR["Android / KMP / Kotlin / Gradle 分類"]
+    G -->|"いいえ"| N{"package.json + scripts.build?"}
+    N -->|"はい"| NO["Next / React / Node 分類"]
+    N -->|"いいえ"| S["子ディレクトリ走査"]
+```
+
+優先順位は **Tauri → Flutter → Gradle → Node** です。Tauri 内部の React と Flutter 内部の Android/iOS を別プロジェクトとして二重検出しません。
+
+### 言語の役割分担
+
+```mermaid
+flowchart TB
+    E["./build.sh"] --> S["Bash: 引数・プロセス・アダプター"]
+    S --> P["Python 3: JSON・plist・安全な解析・レポート"]
+    S --> F["Flutter CLI"]
+    S --> T["Node + Tauri/Cargo"]
+    S --> G["Gradle"]
+    P --> J["機械可読 JSON"]
+    F --> A["成果物"]
+    T --> A
+    G --> A
+```
+
+Shell 単独には限定しません。Bash は互換性の高い薄い入口、Python は構造化データ、実際の最適化は各公式 CLI が担当します。
+
+### モノレポの失敗ポリシー
+
+```mermaid
+stateDiagram-v2
+    [*] --> Detect
+    Detect --> Select
+    Select --> Build
+    Build --> Success: exit 0
+    Build --> Failed: non-zero
+    Success --> More
+    Failed --> Stop: fail-fast
+    Failed --> More: 既定
+    More --> Build: 次あり
+    More --> Aggregate: 完了
+    Stop --> Aggregate
+    Aggregate --> [*]
+```
+
+## 対応プロジェクト
+
+| 種類 | 検出条件 | 既定ビルド | 主な成果物 |
+|---|---|---|---|
+| Tauri 2 | `src-tauri/tauri.conf.json` | `tauri build` | OS 標準バンドル、macOS `.pkg` |
+| Flutter | Flutter SDK を宣言した `pubspec.yaml` | 選択した release 出力 | AAB、分割 APK、IPA、Web、symbols |
+| Android | Android Gradle plugin | app は `bundleRelease` | Gradle 設定依存 |
+| Kotlin/KMP/Gradle | Gradle plugin・settings | `build` | JAR・ターゲット別成果物 |
+| Next/React/Node | 文字列の `scripts.build` | package manager build | `.next`、`dist`、`build` 等 |
+
+`.git`、`node_modules`、`build`、`dist`、`target`、`.gradle`、`.dart_tool`、`.next` は再帰検出から除外します。
+
+## 主なコマンド
+
+```bash
+./build.sh detect --json /workspace
+./build.sh audit --json /workspace
+./build.sh plan --json /workspace
+
+./build.sh build --project apps/mobile
+./build.sh build --all --type flutter
+./build.sh --flutter-outputs appbundle,apk,ipa,web
+./build.sh --fail-fast
+./build.sh --report-json .ubs/build-report.json
+```
+
+| オプション | 内容 |
+|---|---|
+| `--version-bump none|build|patch|minor|major` | バージョン方針 |
+| `--flutter-outputs auto|LIST` | AAB/APK/IPA/Web の組み合わせ |
+| `--project PATH` | 一つのプロジェクトだけ実行 |
+| `--all --type TYPE` | モノレポを種類で絞り込み |
+| `--clean` / `--skip-clean` | Flutter キャッシュ方針 |
+| `--report-json PATH` | プロジェクト別状態・成果物を保存 |
+
+終了コードは、全成功が `0`、検出/ビルド失敗または対象なしが `1`、不正引数が `2` です。
+
+## Flutter 出力
+
+```mermaid
+flowchart TD
+    S["出力選択"] --> A{"auto?"}
+    A -->|"macOS"| MI["AAB + IPA"]
+    A -->|"その他"| AN["AAB"]
+    A -->|"明示リスト"| E["AAB / APK / IPA / Web の組み合わせ"]
+    MI --> I{"IPA を含む?"}
+    E --> I
+    I -->|"はい"| P{"アプリ固有 ExportOptions.plist?"}
+    P -->|"あり"| O["アプリ設定を使用"]
+    P -->|"なし"| T["管理された一般テンプレート"]
+    O --> B["release + symbol 分離"]
+    T --> B
+    AN --> B
+```
+
+ネイティブ出力には release、obfuscation、split debug info を適用します。Flutter Web は release 最適化対象ですが、ネイティブ Dart obfuscation の対象ではありません。
+
+## Tauri 出力
+
+```mermaid
+flowchart TD
+    B["tauri build"] --> O{"ホスト OS"}
+    O -->|"Windows"| W["MSI / NSIS 等"]
+    O -->|"Linux"| L["deb / AppImage / rpm 等"]
+    O -->|"macOS"| M{"package mode"}
+    M -->|"unsigned"| A[".app"]
+    M -->|"auto"| C{"署名設定完備?"}
+    M -->|"signed"| V{"署名設定完備?"}
+    C -->|"いいえ"| A
+    C -->|"はい"| P["codesign 検証 + 署名 .pkg"]
+    V -->|"はい"| P
+    V -->|"いいえ"| E["パッケージ前に失敗"]
+```
+
+## 安全なランタイム更新
+
+通常ビルドは UBS コードをダウンロードしません。
+
+```bash
+./build.sh update --check
+./build.sh update --dry-run
+./build.sh update
+./build.sh update --check --json
+./build.sh update --prune-backups 30
+```
+
+```mermaid
+sequenceDiagram
+    participant C as 呼び出し元
+    participant U as Updater
+    participant H as HTTPS 配布元
+    participant B as Backup
+    participant F as 管理ファイル
+    C->>U: check / dry-run / apply
+    U->>H: manifest 取得
+    U->>U: SemVer・許可パス・重複・欠落検査
+    U->>F: local SHA-256 比較
+    alt check / dry-run
+        U-->>C: 変更一覧のみ
+    else apply
+        U->>H: 全変更ファイル取得
+        U->>U: 全 SHA-256 を先に検証
+        U->>B: 既存ファイル保存
+        U->>F: 一時ファイル + rename
+        alt 途中失敗
+            B-->>F: ロールバック
+        end
+    end
+```
+
+パストラバーサル、シンボリックリンク先、同時更新、許可されない downgrade を遮断します。`UBS_UPDATE_MANIFEST_SHA256` で manifest を外部固定できますが、独立署名の代替ではありません。
+
+## 秘密情報と成果物
+
+`.gitignore` は実 `.env`、Apple/Android 署名資料、サービス設定、キャッシュ、生成パッケージを除外します。example ファイルにはプレースホルダーだけを保存してください。
+
+```mermaid
+flowchart LR
+    D["開発端末"] --> E["placeholder example"]
+    D --> S["秘密・署名資料"]
+    D --> O["生成成果物"]
+    E -->|"追跡"| G["Git / PR"]
+    S -->|"ignore"| L["ローカル / secret store"]
+    O -->|"ignore"| L
+    G --> C["CI privacy 検査"]
+```
+
+Ignore は既に追跡されたファイルやコミット作成者情報を消去しません。漏えいした資格情報は履歴操作より先に無効化・再発行してください。
+
+## AI・MCP
+
+同梱の [`skills/universal-build`](skills/universal-build/SKILL.md) は次の安全な順序を使用します。
+
+```text
+detect --json → audit --json → plan --json → 明示承認 → build --report-json
+```
+
+MCP は任意 Shell を公開せず、workspace root、enum オプション、timeout、stdout/stderr、終了コードを検証する型付きツールとしてラップしてください。
+
+## 検証
+
+```bash
+bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+bash tests/test-detection.sh
+bash tests/test-update.sh
+```
+
+テストは一時 fixture とモック CLI を使います。実 SDK、署名、成果物レベルの逆解析確認は各プロジェクトで別途必要です。
+
+## 既知の制限事項
+
+- プロジェクトはパス順の逐次実行で、依存グラフ・並列ビルドは未実装です。
+- Xcode 専用ネイティブ iOS プロジェクトは検出しません。
+- Gradle flavor、カスタム task、KMP 配布 task は override が必要な場合があります。
+- Tauri JS 難読化は frontend の `dist/` を前提にします。
+- 成果物レポートは既知の標準出力パスを検索します。
+- 更新 manifest は外部 hash pin を提供しますが、独立署名・透明性ログはありません。
+
+## ライセンス
+
+MIT License — Copyright © 2024–2026 kimdzhekhon. 詳細は [LICENSE](LICENSE) を参照してください。

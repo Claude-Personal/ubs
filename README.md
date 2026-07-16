@@ -2,10 +2,13 @@
 
 # Universal Build Script
 
+[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
+
 **`./build.sh` 하나로 Flutter·Tauri·Android/Kotlin·React/Node를 감지하고 사람·CI·AI/MCP가 같은 방식으로 빌드하는 오케스트레이터**
 
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
+![Python](https://img.shields.io/badge/Python-3-3776AB?style=for-the-badge&logo=python&logoColor=white)
 [![Validate](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml/badge.svg)](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml)
 
 ![Flutter](https://img.shields.io/badge/Flutter-AAB%20%7C%20APK%20%7C%20IPA%20%7C%20Web-54C5F8?style=flat-square&logo=flutter)
@@ -129,7 +132,7 @@ flowchart TD
     F -->|"아니오"| H["하위 프로젝트 재귀 탐색"]
     H --> I["중복·생성 폴더 제거 후 경로순 실행"]
     I --> G
-    G -->|"Tauri"| J["macOS .app 또는 서명된 .pkg"]
+    G -->|"Tauri"| J["OS 기본 번들 또는 macOS 서명 .pkg"]
     G -->|"Flutter"| K["AAB / APK / IPA / Web"]
     G -->|"Android·Kotlin·KMP"| L["Gradle task 실행"]
     G -->|"React·Next·Node"| M["패키지 매니저 + build script"]
@@ -137,6 +140,95 @@ flowchart TD
     K --> N
     L --> N
     M --> N
+```
+
+### 감지 우선순위와 중복 제거
+
+```mermaid
+flowchart LR
+    R["탐색할 디렉터리"] --> T{"src-tauri/tauri.conf.json?"}
+    T -->|"예"| TA["Tauri 하나로 등록"]
+    T -->|"아니오"| F{"Flutter SDK가 선언된 pubspec.yaml?"}
+    F -->|"예"| FL["Flutter 하나로 등록"]
+    F -->|"아니오"| G{"Gradle 설정 파일?"}
+    G -->|"예"| GR["Android / KMP / Kotlin / Gradle 분류"]
+    G -->|"아니오"| N{"package.json + scripts.build?"}
+    N -->|"예"| NO["Next / React / Node 분류"]
+    N -->|"아니오"| S["하위 디렉터리 탐색"]
+    TA --> X["내부 frontend 중복 제외"]
+    FL --> Y["내부 android·ios·web 중복 제외"]
+```
+
+### 실제 빌드와 JSON 리포트
+
+```mermaid
+sequenceDiagram
+    participant U as 사용자·AI·CI
+    participant B as build.sh
+    participant A as 생태계 어댑터
+    participant C as Flutter·Cargo·Gradle·Node CLI
+    participant R as JSON 리포트
+    U->>B: build --report-json report.json
+    B->>B: 감지·필터·버전 정책 검증
+    loop 선택된 프로젝트
+        B->>A: 격리된 프로젝트 경로에서 실행
+        A->>C: release 빌드 명령
+        C-->>A: 종료 코드와 산출물
+        A-->>B: 성공 또는 실패
+        B->>R: 프로젝트 상태·exit code·artifact 경로 기록
+    end
+    B-->>U: 전체 성공·실패 집계
+```
+
+### 다각도 설계 기준
+
+| 관점 | 설계 선택 | 확인 방법 |
+|---|---|---|
+| 재현성 | 빌드와 UBS 업데이트 분리, 기본 버전 유지 | `plan --json`, `update --check` |
+| 보안 | 업데이트 허용 목록·HTTPS·SHA-256·경로 검증 | `tests/test-update.sh` |
+| 복구 | 적용 전 백업, 부분 실패 시 롤백 | `.ubs/backups/`와 롤백 테스트 |
+| 이식성 | 생태계 CLI에 위임하고 OS 차이만 어댑터가 처리 | Linux/macOS Tauri 모의 테스트 |
+| 자동화 | stdout JSON과 stderr 분리, 종료 코드 보존 | `detect/audit/plan --json`, `--report-json` |
+| 개인정보 | 환경·서명·서비스 설정·산출물 기본 ignore | `git check-ignore`, CI privacy 검사 |
+
+### 언어 혼용과 책임 경계
+
+```mermaid
+flowchart TB
+    E["./build.sh 안정적 진입점"] --> S["Bash: 옵션·프로세스·어댑터 조정"]
+    S --> P["Python 3: JSON·plist·설정 파싱·리포트"]
+    S --> F["Flutter CLI"]
+    S --> T["Node package manager + Tauri/Cargo"]
+    S --> G["Gradle Wrapper / Gradle"]
+    P --> J["기계 판독 JSON 계약"]
+    F --> A["앱 산출물"]
+    T --> A
+    G --> A
+    J --> C["AI·MCP·CI"]
+    A --> C
+```
+
+Bash만 고집하지 않습니다. Bash는 설치와 호환성이 좋은 얇은 진입점으로, Python은 구조화 데이터와 안전한 파싱에 사용하며, 실제 컴파일 최적화는 각 생태계의 공식 CLI에 위임합니다. 따라서 오케스트레이터 언어를 바꾸는 것보다 Gradle·Cargo·Flutter 캐시와 프로젝트 설정이 전체 빌드 성능에 더 큰 영향을 줍니다.
+
+### 모노레포 실패 처리
+
+```mermaid
+stateDiagram-v2
+    [*] --> Detect
+    Detect --> Select: 타입·경로 필터
+    Select --> BuildProject
+    BuildProject --> RecordSuccess: exit 0
+    BuildProject --> RecordFailure: exit non-zero
+    RecordSuccess --> More
+    RecordFailure --> Stop: fail-fast
+    RecordFailure --> More: 기본 정책
+    More --> BuildProject: 다음 프로젝트 있음
+    More --> Aggregate: 더 없음
+    Stop --> Aggregate
+    Aggregate --> Success: 실패 0개
+    Aggregate --> Failure: 실패 1개 이상
+    Success --> [*]
+    Failure --> [*]
 ```
 
 ## 지원 범위
@@ -266,6 +358,34 @@ Flutter와 Tauri의 버전을 올린 뒤 빌드가 실패하거나 취소되면 
 
 실제 업데이트는 다음 순서로 진행됩니다.
 
+```mermaid
+sequenceDiagram
+    participant C as 사용자·CI
+    participant U as update.sh
+    participant H as HTTPS 원격
+    participant B as .ubs/backups
+    participant F as 관리 파일
+    C->>U: update --check / --dry-run / apply
+    U->>H: manifest 다운로드
+    U->>U: SemVer·허용 경로·중복·누락 검사
+    opt 외부에서 manifest hash 고정
+        U->>U: UBS_UPDATE_MANIFEST_SHA256 비교
+    end
+    U->>F: 로컬 SHA-256 비교
+    alt check 또는 dry-run
+        U-->>C: 변경 목록만 반환
+    else 실제 적용
+        U->>H: 변경 파일 전체 다운로드
+        U->>U: 모든 파일 SHA-256 선검증
+        U->>B: 기존 파일 백업
+        U->>F: 임시 파일 + rename 교체
+        alt 교체 실패
+            B-->>F: 이미 변경된 파일 롤백
+        end
+        U-->>C: 버전·백업 위치 반환
+    end
+```
+
 ```text
 HTTPS manifest 다운로드
   → 허용된 18개 경로·중복·누락 검사
@@ -310,6 +430,18 @@ git check-ignore .env .env.macos signing/App.provisionprofile build/app.aab
 
 Git ignore는 이미 커밋된 파일이나 커밋 작성자 메타데이터를 제거하지 않습니다. 실제 비밀이 과거 이력에 들어갔다면 먼저 해당 비밀을 폐기·재발급하고, 저장소 관리자 승인 아래 이력 재작성 여부를 별도로 결정해야 합니다.
 
+```mermaid
+flowchart LR
+    DEV["개발자 로컬"] --> EX[".env.example 등 플레이스홀더"]
+    DEV --> SEC[".env·인증서·서명·서비스 설정"]
+    DEV --> OUT["build·dist·target·패키지"]
+    EX -->|"추적 허용"| GIT["Git / PR"]
+    SEC -->|".gitignore 차단"| LOCAL["로컬에만 유지"]
+    OUT -->|".gitignore 차단"| LOCAL
+    GIT --> CI["CI privacy ignore 검사"]
+    SEC -.->|"배포 시 별도 secret store"| RUN["빌드 런타임"]
+```
+
 ## Flutter 빌드
 
 ### 요구 사항
@@ -320,6 +452,24 @@ Git ignore는 이미 커밋된 파일이나 커밋 작성자 메타데이터를 
 - iOS 내보내기: 앱 내부 `ios/ExportOptions.plist`; 없으면 `templates/flutter/ExportOptions.plist` 일반 템플릿 사용
 
 ### 기본 동작
+
+```mermaid
+flowchart TD
+    O["Flutter output 선택"] --> A{"auto 또는 명시 목록?"}
+    A -->|"auto + macOS"| MI["AAB + IPA"]
+    A -->|"auto + 기타 OS"| AO["AAB"]
+    A -->|"명시 목록"| EX["AAB / APK / IPA / Web 조합"]
+    MI --> I{"IPA 포함?"}
+    EX --> I
+    I -->|"아니오"| B["선택 산출물 release 빌드"]
+    I -->|"예"| P{"앱의 ios/ExportOptions.plist 존재?"}
+    P -->|"예"| APP["앱 전용 plist 사용"]
+    P -->|"아니오"| TMP["UBS 일반 템플릿 fallback"]
+    APP --> B
+    TMP --> B
+    AO --> B
+    B --> R["네이티브 symbol 분리 + artifact 리포트"]
+```
 
 ```text
 버전 정책 적용
@@ -372,6 +522,21 @@ Tauri CLI가 지원하는 Windows, macOS, Linux 기본 번들을 빌드합니다
 - `.pkg` 생성 시 Apple 인증서, provisioning profile, entitlements
 
 ### 패키지 모드
+
+```mermaid
+flowchart TD
+    S["Tauri release build"] --> O{"호스트 OS"}
+    O -->|"Windows"| W["MSI / NSIS 등 프로젝트 기본 번들"]
+    O -->|"Linux"| L["deb / AppImage / rpm 등 프로젝트 기본 번들"]
+    O -->|"macOS"| M{"UBS_TAURI_PACKAGE_MODE"}
+    M -->|"unsigned"| APP["기본 .app 번들"]
+    M -->|"auto"| C{"서명 설정 완전?"}
+    M -->|"signed"| V{"서명 설정 완전?"}
+    C -->|"아니오"| APP
+    C -->|"예"| PKG["codesign 검증 + 서명된 .pkg"]
+    V -->|"예"| PKG
+    V -->|"아니오"| E["빌드 전 명확한 실패"]
+```
 
 `UBS_TAURI_PACKAGE_MODE`로 결과물을 제어합니다.
 
