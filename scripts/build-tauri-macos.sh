@@ -21,12 +21,12 @@ NC='\033[0m'
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
-SCRIPT_VERSION="1.0.0"
-REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Flutter-Optimization-Build-Script/main"
+SCRIPT_VERSION="1.1.0"
+REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 
 check_script_update() {
   local remote_version
-  remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/TAURI_VERSION" 2>/dev/null | tr -d '[:space:]')
+  remote_version=$(curl -fsSL --max-time 3 "$REPO_RAW/scripts/TAURI_VERSION" 2>/dev/null | tr -d '[:space:]')
   [ -z "$remote_version" ] && return
 
   local latest
@@ -40,7 +40,7 @@ check_script_update() {
     return
   fi
 
-  if curl -fsSL --max-time 5 "$REPO_RAW/build-tauri-macos.sh" -o "$0.new"; then
+  if curl -fsSL --max-time 5 "$REPO_RAW/scripts/build-tauri-macos.sh" -o "$0.new"; then
     chmod +x "$0.new"
     mv "$0.new" "$0"
     echo -e "${GREEN}✅ 업데이트 완료 (${remote_version}). 스크립트를 다시 실행합니다...${NC}"
@@ -139,14 +139,52 @@ echo -e "${CYAN}🔑 서명 ID: $TAURI_SIGN_IDENTITY${NC}"
 echo -e "${CYAN}📄 Provisioning Profile: $PROVISION_PROFILE${NC}"
 
 # ==========================================
+# 환경변수 주입 확인 (.env → import.meta.env)
+# ==========================================
+
+# Vite는 프로젝트 루트의 .env / .env.production 을 별도 플래그 없이 자동으로 읽어
+# `VITE_` 접두사가 붙은 값을 import.meta.env.VITE_* 로 프런트엔드 빌드에 주입한다.
+# (Flutter의 --dart-define-from-file 과 동일한 역할, Vite는 기본 내장 기능)
+if [ -f ".env" ] || [ -f ".env.production" ]; then
+  echo -e "${CYAN}🔑 프런트엔드 .env 감지됨 — Vite가 빌드 시 자동 주입합니다.${NC}"
+fi
+
+# ==========================================
+# JS 난독화 옵션 (TAURI_OBFUSCATE_JS=true)
+# ==========================================
+
+# Tauri 프런트엔드(JS/TS)는 Dart AOT처럼 네이티브로 컴파일되지 않고 텍스트로 번들에 포함된다.
+# Vite가 기본으로 minify는 하지만(변수명 축약) 진짜 난독화(제어 흐름 변형, 문자열 암호화)는 아니다.
+# 이 옵션을 켜면 javascript-obfuscator로 dist/ 산출물을 한 번 더 난독화한 뒤,
+# --config로 beforeBuildCommand를 비워 tauri build가 그 결과를 덮어쓰지 않게 한다.
+OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-false}"
+
+# ==========================================
 # 빌드 시작
 # ==========================================
 
 BUILD_START_TS=$(date +%s)
 
-echo -e "${BLUE}🚀 [1/4] npm install & tauri build...${NC}"
-npm install --no-fund --no-audit >/dev/null 2>&1 || true
-npm run tauri build
+if [ "$OBFUSCATE_JS" = "true" ]; then
+  echo -e "${BLUE}🚀 [1/5] npm install & 프런트엔드 빌드...${NC}"
+  npm install --no-fund --no-audit >/dev/null 2>&1 || true
+  npm run build
+
+  echo -e "${YELLOW}🔒 [2/5] JS 난독화 (javascript-obfuscator)...${NC}"
+  if ! npx --yes javascript-obfuscator dist --output dist \
+    --compact true --control-flow-flattening true --string-array true \
+    --string-array-encoding base64 --self-defending true; then
+    echo -e "${RED}⚠️  javascript-obfuscator 실행 실패 — 난독화 없이 계속합니다.${NC}"
+  fi
+
+  echo -e "${BLUE}🚀 [3/5] tauri build (프런트엔드 재빌드 스킵)...${NC}"
+  npm run tauri build -- --config '{"build":{"beforeBuildCommand":""}}'
+else
+  echo -e "${BLUE}🚀 [1/5] npm install & tauri build...${NC}"
+  npm install --no-fund --no-audit >/dev/null 2>&1 || true
+  npm run tauri build
+  echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true bash scripts/build-tauri-macos.sh${NC}"
+fi
 
 BUNDLE_APP="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 if [ ! -d "$BUNDLE_APP" ]; then
@@ -154,7 +192,7 @@ if [ ! -d "$BUNDLE_APP" ]; then
   exit 1
 fi
 
-echo -e "${YELLOW}🛡️ [2/4] Codesigning (Apple Distribution)...${NC}"
+echo -e "${YELLOW}🛡️ [4/5] Codesigning (Apple Distribution)...${NC}"
 cp "$PROVISION_PROFILE" "$BUNDLE_APP/Contents/embedded.provisionprofile"
 codesign --deep --force --options runtime \
   --entitlements "$ENTITLEMENTS" \
@@ -162,7 +200,7 @@ codesign --deep --force --options runtime \
   "$BUNDLE_APP"
 codesign --verify --deep --strict --verbose=2 "$BUNDLE_APP"
 
-echo -e "${YELLOW}📦 [3/4] Building signed installer package (.pkg)...${NC}"
+echo -e "${YELLOW}📦 [5/5] Building signed installer package (.pkg)...${NC}"
 if [ -z "$TAURI_INSTALLER_IDENTITY" ]; then
   echo -e "${RED}❌ TAURI_INSTALLER_IDENTITY 가 설정되지 않았습니다 (.env.macos).${NC}"
   exit 1
@@ -174,7 +212,7 @@ productbuild --component "$BUNDLE_APP" /Applications \
   --sign "$TAURI_INSTALLER_IDENTITY" \
   "$PKG_OUT"
 
-echo -e "${BLUE}📂 [4/4] Opening output folder...${NC}"
+echo -e "${BLUE}📂 결과 폴더 여는 중...${NC}"
 if [[ "$OSTYPE" == "darwin"* ]]; then
   open "$SIGNING_DIR/build"
 fi
