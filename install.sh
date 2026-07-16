@@ -49,6 +49,12 @@ install_file() {
 # 모든 어댑터를 설치해야 모노레포 루트에서 서로 다른 프로젝트를 함께 빌드할 수 있다.
 install_file "VERSION"
 install_file "build.sh"
+install_file "scripts/ubs.py"
+install_file "scripts/bootstrap-update.sh"
+install_file "scripts/build-rust-helper.sh"
+install_file "native/ubs-helper/Cargo.toml"
+install_file "native/ubs-helper/Cargo.lock"
+install_file "native/ubs-helper/src/main.rs"
 install_file "scripts/lib/detect.sh"
 install_file "scripts/lib/audit.sh"
 install_file "scripts/lib/node-package-manager.sh"
@@ -64,6 +70,14 @@ install_file "skills/universal-build/SKILL.md"
 install_file "skills/universal-build/agents/openai.yaml"
 install_file "skills/universal-build/references/optimization.md"
 install_file "templates/flutter/ExportOptions.plist"
+
+if [ "${UBS_BUILD_RUST_HELPER:-false}" = "true" ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    bash scripts/build-rust-helper.sh
+  else
+    echo -e "${YELLOW}Rust helper 요청을 건너뜁니다: cargo를 찾을 수 없습니다.${NC}"
+  fi
+fi
 
 if [ "$PROJECT_TYPE" = "flutter" ]; then
   if [ ! -f ".env.example" ]; then

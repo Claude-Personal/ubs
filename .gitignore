@@ -31,6 +31,8 @@ node_modules/
 .dart_tool/
 .gradle/
 .next/
+__pycache__/
+*.py[cod]
 DerivedData/
 *.xcarchive
 *.dSYM/

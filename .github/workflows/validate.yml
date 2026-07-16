@@ -29,10 +29,16 @@ jobs:
       - name: Validate Bash syntax
         run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 
+      - name: Validate Python core
+        run: python -m py_compile scripts/ubs.py
+
       - name: Run behavior tests
         run: |
           bash tests/test-detection.sh
           bash tests/test-update.sh
+
+      - name: Validate Rust helper
+        run: bash tests/test-rust-helper.sh
 
       - name: Validate update manifest
         run: |

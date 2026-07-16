@@ -82,6 +82,21 @@ cmp "$TARGET/scripts/lib/detect.sh" "$REMOTE/scripts/lib/detect.sh" || {
   exit 1
 }
 
+# Python 코어가 사라져도 얇은 Bash bootstrap이 update를 실행해 복구해야 한다.
+rm -f "$TARGET/scripts/ubs.py"
+CORE_MISSING_CHECK="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+  bash "$TARGET/build.sh" update --check)"
+printf '%s\n' "$CORE_MISSING_CHECK" | grep -Fq 'scripts/ubs.py' || {
+  echo "bootstrap update가 누락된 Python 코어를 찾지 못했습니다." >&2
+  exit 1
+}
+UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+  bash "$TARGET/build.sh" update >/dev/null
+cmp "$TARGET/scripts/ubs.py" "$REMOTE/scripts/ubs.py" || {
+  echo "bootstrap update가 Python 코어를 복구하지 못했습니다." >&2
+  exit 1
+}
+
 UPDATE_JSON="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check --json)"
 printf '%s' "$UPDATE_JSON" | python3 -c '
@@ -135,7 +150,7 @@ fi
 }
 
 # 원격 버전이 더 낮으면 명시적 허용 없이 적용하지 않아야 한다.
-sed 's/^version 2\.2\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
+sed 's/^version 3\.0\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
   > "$REMOTE/scripts/update-manifest.txt"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
