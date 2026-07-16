@@ -89,8 +89,10 @@ jobs:
                   "tests/test-python-adapters.sh", "graph --json",
                   "ubs.dependencies.json", "ios-xcode", "scripts/ubs_mcp.py",
                   "UBS_MCP_ROOT", "UBS_XCODE_SCHEME",
+                  "UBS_OPEN_OUTPUT",
               ):
-                  assert required in text, f"{document} is missing 3.3 reference {required}"
+                  assert required in text, f"{document} is missing current feature reference {required}"
+          assert "Copyright (c) 2026 kimdzhekhon" in Path("LICENSE").read_text(encoding="utf-8")
           print("multilingual README and Mermaid diagrams are valid")
           PY
 

@@ -181,6 +181,23 @@ stateDiagram-v2
 
 退出码 `0` 表示全部成功，`1` 表示检测/构建失败或没有匹配项目，`2` 表示参数无效。
 
+## 构建完成后打开产物目录
+
+所有选中项目执行结束后，本地交互式终端会通过 Finder、Explorer 或 `xdg-open` 打开成功产物的位置。Flutter 归并到 `build/`，Tauri 打开 bundle 或签名包目录，Gradle 打开 outputs/libs，Node 打开 `dist`/`build`/`.next`，Xcode 打开 `build/ubs`。
+
+```mermaid
+flowchart LR
+    B["构建选中项目"] --> S{"存在成功产物?"}
+    S -->|"否"| E["只输出状态"]
+    S -->|"是"| M{"UBS_OPEN_OUTPUT"}
+    M -->|"auto + 本地 TTY"| D["归一化产物目录"]
+    M -->|"true"| D
+    M -->|"false / CI / pipe"| E
+    D --> O["Finder / Explorer / xdg-open"]
+```
+
+默认 `UBS_OPEN_OUTPUT=auto`，不会在 CI 或非交互管道中隐式打开 GUI。设置 `true` 可强制打开，设置 `false` 可禁用，`UBS_NO_OPEN=true` 是兼容关闭开关。打开目录属于 best-effort，失败不会把成功构建改成失败；`UBS_NO_NOTIFY` 仅控制 macOS 通知。
+
 ## Flutter 产物流
 
 ```mermaid
@@ -318,8 +335,11 @@ bash tests/test-rust-helper.sh
 - Gradle flavor、自定义 release task、KMP 发布 task 可能需要覆盖配置。
 - Tauri JS 混淆假定前端输出目录为 `dist/`。
 - 产物报告只搜索已知的默认输出路径。
+- 自动打开目录使用同一套产物规则，因此自定义输出路径可能需要手动打开。
 - 更新 manifest 支持外部 hash pin，但没有独立签名或透明日志。
 
-## 许可证
+## 许可证与外部代码
 
-MIT License — Copyright © 2024–2026 kimdzhekhon。详见 [LICENSE](LICENSE)。
+MIT License — Copyright © 2026 kimdzhekhon。如果作品在 2026 年首次创作并公开，`2026` 更合适；只有能证明存在 2024 年的早期作品或首次公开时，才使用 `2024–2026`。参见[美国版权局 notice 指南](https://www.copyright.gov/circs/circ03.pdf)、[OSI MIT License](https://opensource.org/license/MIT)和 [LICENSE](LICENSE)。
+
+可以研究其他开源项目的思想、公开 API 和通用设计模式，但不能把复制的代码或文字拆成小片段来掩盖来源。引入实现前必须确认许可证兼容性，并保留要求的版权、LICENSE、NOTICE 和出处。GPL/AGPL 等义务不同的代码未经专门审查不要混入。本次产物目录功能是针对本仓库独立实现的。

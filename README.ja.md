@@ -173,6 +173,23 @@ stateDiagram-v2
 
 終了コードは、全成功が `0`、検出/ビルド失敗または対象なしが `1`、不正引数が `2` です。
 
+## ビルド完了後に成果物フォルダーを開く
+
+選択した全プロジェクトの処理後、ローカルの対話端末では成功した成果物の場所を Finder、Explorer、または `xdg-open` で開きます。Flutter は `build/`、Tauri は bundle または署名 package、Gradle は outputs/libs、Node は `dist`/`build`/`.next`、Xcode は `build/ubs` を対象にします。
+
+```mermaid
+flowchart LR
+    B["選択 project を build"] --> S{"成功成果物あり?"}
+    S -->|"なし"| E["status のみ出力"]
+    S -->|"あり"| M{"UBS_OPEN_OUTPUT"}
+    M -->|"auto + local TTY"| D["成果物 folder を正規化"]
+    M -->|"true"| D
+    M -->|"false / CI / pipe"| E
+    D --> O["Finder / Explorer / xdg-open"]
+```
+
+既定の `UBS_OPEN_OUTPUT=auto` は CI や非対話 pipe で GUI を開きません。強制する場合は `true`、無効化する場合は `false`、互換スイッチは `UBS_NO_OPEN=true` です。folder を開けなくても成功済み build は失敗にならず、`UBS_NO_NOTIFY` は macOS 通知だけを制御します。
+
 ## Flutter 出力
 
 ```mermaid
@@ -308,8 +325,11 @@ bash tests/test-rust-helper.sh
 - Gradle flavor、カスタム task、KMP 配布 task は override が必要な場合があります。
 - Tauri JS 難読化は frontend の `dist/` を前提にします。
 - 成果物レポートは既知の標準出力パスを検索します。
+- 自動 folder open も同じ検出規則を使うため、custom 出力先は手動で開く場合があります。
 - 更新 manifest は外部 hash pin を提供しますが、独立署名・透明性ログはありません。
 
-## ライセンス
+## ライセンスと外部コード
 
-MIT License — Copyright © 2024–2026 kimdzhekhon. 詳細は [LICENSE](LICENSE) を参照してください。
+MIT License — Copyright © 2026 kimdzhekhon. 2026 年に初めて作成・公開した著作物なら `2026` が適切で、`2024–2026` は 2024 年の先行著作物や公開を確認できる場合だけ使います。[米国著作権局の notice ガイド](https://www.copyright.gov/circs/circ03.pdf)、[OSI の MIT License](https://opensource.org/license/MIT)、[LICENSE](LICENSE) を参照してください。
+
+他プロジェクトのアイデア、公開 API、一般的な設計 pattern は参考にできますが、code や文章を小片に分けて出典を曖昧にコピーしてはいけません。実装を取り込む場合は license 互換性を確認し、必要な copyright、LICENSE、NOTICE、出典を保持します。GPL/AGPL など義務が異なる code は個別確認なしに混在させません。今回の output-folder 実装はこの repository 向けに独立して作成しました。
