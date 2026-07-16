@@ -278,18 +278,6 @@ build_android() {
     --split-debug-info=build/app/outputs/symbols \
     --tree-shake-icons \
     --no-pub
-
-  if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
-    if [ -d "$ANDROID_OUT" ]; then
-      open "$ANDROID_OUT"
-    else
-      echo -e "${RED}⚠️  Android 출력 폴더를 찾을 수 없습니다: $ANDROID_OUT${NC}"
-    fi
-  elif [[ "$OSTYPE" == "linux-gnu"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
-    xdg-open "$ANDROID_OUT" 2>/dev/null || true
-  elif [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "cygwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
-    explorer.exe "$(cygpath -w "$ANDROID_OUT")" 2>/dev/null || true
-  fi
 }
 
 build_apk() {
@@ -357,7 +345,7 @@ fi
 BUILD_COMPLETED=true
 
 # ==========================================
-# 빌드 완료 알림 + 폴더 열기
+# 빌드 완료 알림 (결과 폴더는 Python 오케스트레이터가 전체 빌드 종료 후 연다.)
 # ==========================================
 
 BUILD_END_TS=$(date +%s)
@@ -370,14 +358,6 @@ if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
   afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
   say "Build process completed successfully" 2>/dev/null || true
   osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\"" 2>/dev/null || true
-
-  if [ "$BUILD_IOS" = true ]; then
-    if [ -d "$IOS_OUT" ]; then
-      open "$IOS_OUT"
-    else
-      echo -e "${RED}⚠️  iOS 출력 폴더를 찾을 수 없습니다: $IOS_OUT${NC}"
-    fi
-  fi
 fi
 
 echo -e "------------------------------------------------------------"

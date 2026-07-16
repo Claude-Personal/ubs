@@ -26,10 +26,12 @@ Find the nearest workspace directory containing `build.sh`. If `scripts/ubs.py` 
 3. Run a real build only when the user requested a build or release. Keep versions unchanged unless the user explicitly requested a bump:
 
    ```bash
-   UBS_NO_NOTIFY=true ./build.sh --version-bump none --report-json .ubs/build-report.json .
+   UBS_OPEN_OUTPUT=false UBS_NO_NOTIFY=true ./build.sh --version-bump none --report-json .ubs/build-report.json .
    ```
 
 4. Read the generated build report and report successes, failures, and artifact paths. Preserve full failing command output when diagnosing.
+
+Normal interactive local builds use `UBS_OPEN_OUTPUT=auto` and reveal successful artifact folders after every selected project has finished. Agent, MCP, CI, and redirected runs should explicitly set `UBS_OPEN_OUTPUT=false`; use `true` only when the user asked to open a desktop file manager. Folder opening is best effort and does not change a successful build status.
 
 Do not silently add signing, publishing, notarization, upload, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
 

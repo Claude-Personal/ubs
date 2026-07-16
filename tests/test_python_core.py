@@ -32,6 +32,66 @@ class PythonCoreTests(unittest.TestCase):
             encoding="utf-8", errors="backslashreplace",
         )
 
+    def test_flutter_artifacts_open_the_common_build_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            output = root / "build/app/outputs/bundle/release"
+            output.mkdir(parents=True)
+            (output / "app-release.aab").write_bytes(b"bundle")
+            web = root / "build/web"
+            web.mkdir(parents=True)
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("flutter", root)),
+                [root / "build"],
+            )
+
+    def test_output_directories_cover_tauri_gradle_and_xcode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            bundle = root / "src-tauri/target/release/bundle/deb"
+            package = root / "signing/build"
+            bundle.mkdir(parents=True)
+            package.mkdir(parents=True)
+            (bundle / "app.deb").write_bytes(b"deb")
+            (package / "app.pkg").write_bytes(b"pkg")
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("tauri", root)),
+                [package, root / "src-tauri/target/release/bundle"],
+            )
+
+            gradle_output = root / "app/build/outputs/apk/release"
+            gradle_output.mkdir(parents=True)
+            (gradle_output / "app-release.apk").write_bytes(b"apk")
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("android", root)),
+                [gradle_output],
+            )
+
+            archive = root / "build/ubs/Demo.xcarchive"
+            archive.mkdir(parents=True)
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("ios-xcode", root)),
+                [root / "build/ubs"],
+            )
+
+    def test_output_folder_opening_is_cross_platform_and_opt_in_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "dist").mkdir()
+            environment = {**os.environ, "UBS_OPEN_OUTPUT": "true"}
+            with mock.patch.object(ubs.platform, "system", return_value="Darwin"), \
+                    mock.patch.object(ubs.shutil, "which", return_value="/usr/bin/open"), \
+                    mock.patch.object(ubs.subprocess, "Popen") as process:
+                opened = ubs.open_artifact_directories(
+                    [ubs.Project("node", root)], environment,
+                )
+            self.assertEqual(opened, [str(root / "dist")])
+            process.assert_called_once()
+            self.assertEqual(process.call_args.args[0], ["/usr/bin/open", str(root / "dist")])
+        self.assertFalse(ubs.should_open_output({"CI": "true"}, interactive=True))
+        self.assertFalse(ubs.should_open_output({"UBS_OPEN_OUTPUT": "auto"}, interactive=False))
+        self.assertTrue(ubs.should_open_output({"UBS_OPEN_OUTPUT": "true"}, interactive=False))
+
     def test_windows_gradle_arguments_preserve_backslashes(self) -> None:
         value = r'-PstoreFile=C:\Users\me\release.jks "-Pcache=C:\build cache"'
         self.assertEqual(
@@ -183,10 +243,14 @@ class PythonCoreTests(unittest.TestCase):
                 return 0
 
             options = ubs.Options(root=root, jobs=2)
-            with mock.patch.object(ubs, "run_project", side_effect=record):
+            with mock.patch.object(ubs, "run_project", side_effect=record), \
+                    mock.patch.object(ubs, "open_artifact_directories") as opener:
                 status = ubs.execute_projects(projects, options, ubs.BuildReport(None), root)
             self.assertEqual(status, 0)
             self.assertEqual(observed, ["core", "app"])
+            opener.assert_called_once_with([
+                ubs.Project("node", core), ubs.Project("node", app),
+            ])
 
     def test_xcode_adapter_archives_with_discovered_scheme(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

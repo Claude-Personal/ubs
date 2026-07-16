@@ -287,11 +287,6 @@ if [ "$SIGN_PACKAGE" = true ]; then
 fi
 BUILD_COMPLETED=true
 
-if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
-  echo -e "${BLUE}📂 결과 폴더 여는 중...${NC}"
-  open "$RESULT_DIR"
-fi
-
 # ==========================================
 # 빌드 완료 알림
 # ==========================================

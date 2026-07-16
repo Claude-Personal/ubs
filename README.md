@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 
 > **2.x에서 3.x로 올릴 때:** 2.x updater는 Python/Rust 관리 파일을 받을 수 없으므로 위 `UBS_FORCE=true` 설치 명령을 한 번 사용해야 합니다. 3.x 설치가 끝난 뒤에는 `./build.sh update`가 전체 25개 관리 파일을 갱신합니다.
 
-설치기는 기본적으로 `v3.3.0` release ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
+설치기는 기본적으로 `v3.4.0` release ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
 
 설치기는 기본적으로 대상 `.gitignore`에 `.ubs`, 환경파일, 서명 자료를 보호하는 멱등 블록을 추가합니다. 저장소 정책상 직접 관리해야 한다면 `UBS_MANAGE_GITIGNORE=false`를 명시할 수 있습니다.
 
@@ -380,6 +380,34 @@ stateDiagram-v2
 `--fail-fast`가 없으면 같은 위상 단계의 다른 독립 프로젝트는 계속 빌드합니다. 단계가 실패하면 그 결과에 의존하는 후속 단계는 건너뛰며 마지막에 전체·성공·실패·건너뜀 개수를 확인할 수 있습니다.
 
 Flutter와 Tauri의 버전을 올린 뒤 빌드가 실패하거나 취소되면 원래 버전으로 자동 복원합니다. 성공한 경우에만 새 버전을 유지합니다.
+
+### 빌드 완료 후 결과 폴더 열기
+
+로컬 대화형 터미널에서 빌드가 끝나면 성공한 프로젝트의 산출물 폴더를 운영체제 파일 탐색기로 엽니다. Flutter는 공통 `build/`, Tauri는 번들 또는 서명 패키지 폴더, Gradle은 `outputs`/`libs`, Node는 `dist`/`build`/`.next`, Xcode는 `build/ubs`를 엽니다. 여러 프로젝트를 병렬로 빌드해도 전체 실행이 끝난 뒤 한 번씩만 엽니다.
+
+```mermaid
+flowchart LR
+    B["선택 프로젝트 빌드"] --> S{"성공한 산출물 있음?"}
+    S -->|"아니오"| E["종료 상태만 출력"]
+    S -->|"예"| M{"UBS_OPEN_OUTPUT"}
+    M -->|"auto + 로컬 TTY"| D["기본 산출물 폴더 정규화"]
+    M -->|"true"| D
+    M -->|"false / CI / 비대화형 pipe"| E
+    D --> O["Finder / Explorer / xdg-open"]
+```
+
+```bash
+# 기본: 로컬 터미널에서는 열고 CI·파이프에서는 열지 않음
+./build.sh
+
+# CI가 아니어도 강제로 열기
+UBS_OPEN_OUTPUT=true ./build.sh
+
+# 항상 열지 않기
+UBS_OPEN_OUTPUT=false ./build.sh
+```
+
+폴더 열기는 빌드 성공 여부와 분리된 best-effort 동작입니다. 파일 탐색기가 없거나 실행에 실패해도 이미 성공한 빌드를 실패로 바꾸지 않습니다. `UBS_NO_NOTIFY=true`는 macOS 알림만 끄며, 폴더 열기는 `UBS_OPEN_OUTPUT` 또는 호환용 `UBS_NO_OPEN=true`로 별도 제어합니다.
 
 ## 빌드 스크립트 업데이트
 
@@ -736,7 +764,9 @@ UBS_INSTALL_MODE=always ./build.sh
 | `UBS_XCODE_EXPORT_OPTIONS` | `ExportOptions.plist` | Xcode export plist 경로 |
 | `UBS_XCODE_FLAGS` | 비어 있음 | 추가 xcodebuild 인자 |
 | `UBS_TAURI_PACKAGE_MODE` | `auto` | Tauri OS 기본 번들/macOS `.pkg` 정책 |
-| `UBS_NO_NOTIFY` | `false` | macOS 알림과 결과 폴더 열기 생략 |
+| `UBS_OPEN_OUTPUT` | `auto` | 로컬 TTY에서 성공 산출물 폴더 열기; `true` 강제, `false` 비활성화 |
+| `UBS_NO_OPEN` | `false` | 호환용 결과 폴더 열기 비활성화 스위치 |
+| `UBS_NO_NOTIFY` | `false` | macOS 소리·음성·완료 알림 생략 |
 | `UBS_ALLOW_SELF_UPDATE` | 폐기됨 | 개별 어댑터 교체를 하지 않고 중앙 `./build.sh update` 사용 안내 |
 | `UBS_UPDATE_BASE_URL` | 공식 `main` raw URL | 사설 mirror 또는 테스트용 업데이트 기준 URL |
 | `UBS_UPDATE_ALLOW_DOWNGRADE` | `false` | 더 낮은 SemVer 적용을 명시적으로 허용 |
@@ -963,6 +993,7 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh
 - 모노레포 설치 시 하위 앱별 `.env`, Apple 서명 파일과 플랫폼 설정은 자동 생성하지 않습니다.
 - `audit`는 알려진 설정 패턴만 찾으며 커스텀 플러그인·간접 Gradle 설정·실제 바이너리 상태를 완전히 증명하지 않습니다.
 - `--report-json`은 알려진 기본 출력 경로를 검색하므로 프로젝트가 산출물을 다른 위치로 옮기면 목록에 나타나지 않을 수 있습니다.
+- 자동 폴더 열기도 같은 산출물 탐색 규칙을 사용하므로 커스텀 출력 경로는 열리지 않을 수 있습니다. 이 경우 `--report-json` 결과와 실제 build script를 함께 확인하십시오.
 - 업데이트 manifest는 선택적으로 SHA-256을 외부에서 고정할 수 있지만 별도 전자서명·투명성 로그는 제공하지 않습니다.
 
 ## Roadmap
@@ -991,8 +1022,12 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh
 - [x] Xcode-only iOS 네이티브 어댑터
 - [x] 선택형 로컬 MCP 서버 패키지
 
-## 라이선스
+## 라이선스와 외부 코드 사용
 
-MIT License — Copyright © 2024-2026 kimdzhekhon
+MIT License — Copyright © 2026 kimdzhekhon
 
-자세한 내용은 [LICENSE](LICENSE)를 확인하십시오.
+이 저장소를 실제로 2026년에 처음 작성·공개했다면 `2026`이 맞습니다. `2024-2026`은 2024년의 최초 공개 또는 그때부터 이어진 저작물이 있다는 근거가 있을 때만 사용합니다. 저작권 표시는 일반적으로 최초 공개 연도를 포함하며, MIT 원문은 저작권 표시와 허가 문구를 복제물에 유지하도록 요구합니다. [미국 저작권청의 notice 설명](https://www.copyright.gov/circs/circ03.pdf)과 [OSI MIT License](https://opensource.org/license/MIT)를 참고하십시오.
+
+다른 오픈소스의 기능 아이디어·공개 API·일반적인 설계 패턴은 참고할 수 있지만, 코드나 문서를 “조금씩” 복사해 출처를 흐리면 안 됩니다. 실제 코드를 가져올 때는 원본 라이선스가 MIT 프로젝트와 호환되는지 확인하고 필요한 저작권 표시·LICENSE·NOTICE·출처를 보존합니다. GPL/AGPL 등 의무가 다른 코드는 별도 검토 없이 섞지 않습니다. 이번 결과 폴더 기능은 외부 구현을 복사하지 않고 저장소 구조에 맞게 독립 작성했습니다.
+
+자세한 허가 조건은 [LICENSE](LICENSE)를 확인하십시오.

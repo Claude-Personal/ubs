@@ -216,6 +216,23 @@ Important options:
 
 Exit code `0` means every selected project succeeded, `1` means discovery/build failure or no matching project, and `2` means invalid arguments.
 
+## Opening output folders after a build
+
+After all selected projects finish, an interactive local terminal opens each successful output location with Finder, Explorer, or `xdg-open`. Flutter collapses outputs to `build/`; Tauri opens bundle or signed-package locations; Gradle opens output/library folders; Node opens `dist`, `build`, or `.next`; and Xcode opens `build/ubs`.
+
+```mermaid
+flowchart LR
+    B["Build selected projects"] --> S{"Successful artifacts?"}
+    S -->|"no"| E["Print status only"]
+    S -->|"yes"| M{"UBS_OPEN_OUTPUT"}
+    M -->|"auto + local TTY"| D["Normalize output folders"]
+    M -->|"true"| D
+    M -->|"false / CI / pipe"| E
+    D --> O["Finder / Explorer / xdg-open"]
+```
+
+`UBS_OPEN_OUTPUT=auto` is the default and never opens a GUI implicitly in CI or a non-interactive pipe. Use `UBS_OPEN_OUTPUT=true` to force it or `UBS_OPEN_OUTPUT=false` to disable it. `UBS_NO_OPEN=true` remains a compatibility off switch. Opening is best effort and cannot turn a successful build into a failed build; `UBS_NO_NOTIFY` controls macOS notifications separately.
+
 ## Flutter output flow
 
 ```mermaid
@@ -374,8 +391,11 @@ Tests use temporary fixtures and mocked ecosystem commands. Real SDK builds, App
 - Gradle flavors, custom release tasks, and KMP deployment tasks may require overrides.
 - Tauri JS obfuscation assumes a `dist/` frontend output.
 - Artifact reporting searches known default output locations.
+- Automatic folder opening uses the same artifact rules, so custom output paths may need manual navigation.
 - The update manifest supports external hash pinning but not an independent signature/transparency log.
 
-## License
+## License and external code
 
-MIT License — Copyright © 2024–2026 kimdzhekhon. See [LICENSE](LICENSE).
+MIT License — Copyright © 2026 kimdzhekhon. If this work was first created and published in 2026, `2026` is the appropriate notice; use `2024–2026` only when an earlier 2024 work or publication can be substantiated. See the [U.S. Copyright Office notice guidance](https://www.copyright.gov/circs/circ03.pdf), the [OSI MIT text](https://opensource.org/license/MIT), and [LICENSE](LICENSE).
+
+Ideas, public APIs, and general design patterns may be studied, but do not disguise copied code or prose as a collection of small fragments. Before incorporating implementation text, verify license compatibility and preserve every required copyright, license, notice, and attribution. Do not mix code with materially different obligations such as GPL/AGPL without a deliberate review. The output-folder implementation in this change was written independently for this repository.

@@ -893,6 +893,98 @@ def discover_artifacts(project: Project) -> List[str]:
     return sorted(found)
 
 
+def artifact_output_directories(project: Project) -> List[Path]:
+    """Return useful folders to reveal after a successful build."""
+    artifacts = [Path(value) for value in discover_artifacts(project)]
+    if not artifacts:
+        return []
+
+    preferred_roots: Dict[str, Sequence[Path]] = {
+        "flutter": (project.path / "build",),
+        "tauri": (
+            project.path / "signing" / "build",
+            project.path / "src-tauri" / "target" / "release" / "bundle",
+        ),
+        "ios-xcode": (project.path / "build" / "ubs",),
+    }
+    selected: Set[Path] = set()
+    covered: Set[Path] = set()
+    for root in preferred_roots.get(project.type, ()):
+        resolved_root = root.resolve()
+        matches = {
+            artifact for artifact in artifacts
+            if artifact == resolved_root or resolved_root in artifact.parents
+        }
+        if matches and resolved_root.is_dir():
+            selected.add(resolved_root)
+            covered.update(matches)
+
+    for artifact in artifacts:
+        if artifact in covered:
+            continue
+        if artifact.is_file() or artifact.suffix.lower() in {".app", ".xcarchive"}:
+            selected.add(artifact.parent)
+        elif artifact.is_dir():
+            selected.add(artifact)
+    return sorted(selected, key=str)
+
+
+def should_open_output(environment: Dict[str, str], interactive: Optional[bool] = None) -> bool:
+    """Enable Finder/Explorer opening for local terminals, never implicitly in CI."""
+    if environment.get("UBS_NO_OPEN", "false").lower() == "true":
+        return False
+    mode = environment.get("UBS_OPEN_OUTPUT", "auto").lower()
+    if mode == "false":
+        return False
+    if mode == "true":
+        return True
+    if mode != "auto" or environment.get("CI", "false").lower() == "true":
+        return False
+    return sys.stdout.isatty() if interactive is None else interactive
+
+
+def output_open_command(directory: Path, environment: Dict[str, str]) -> Optional[List[str]]:
+    executable_name = {
+        "Darwin": "open",
+        "Windows": "explorer.exe",
+        "Linux": "xdg-open",
+    }.get(platform.system())
+    if not executable_name:
+        return None
+    executable = shutil.which(executable_name, path=environment.get("PATH"))
+    return [executable, str(directory)] if executable else None
+
+
+def open_artifact_directories(
+    projects: Sequence[Project], environment: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    environment = os.environ.copy() if environment is None else environment
+    if not should_open_output(environment):
+        return []
+    directories = sorted({
+        directory
+        for project in projects
+        for directory in artifact_output_directories(project)
+    }, key=str)
+    opened: List[str] = []
+    for directory in directories:
+        command = output_open_command(directory, environment)
+        if not command:
+            eprint(f"{YELLOW}결과 폴더를 열 프로그램을 찾지 못했습니다: {directory}{NC}")
+            continue
+        try:
+            subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as error:
+            eprint(f"{YELLOW}결과 폴더를 열지 못했습니다: {directory} ({error}){NC}")
+            continue
+        opened.append(str(directory))
+        print(f"{CYAN}📂 빌드 결과 폴더: {directory}{NC}")
+    return opened
+
+
 class BuildReport:
     def __init__(self, path: Optional[Path]) -> None:
         self.path = path
@@ -1309,6 +1401,7 @@ def execute_projects(
     layers = topological_layers(graph)
     ordered_projects = [project for layer in layers for project in layer]
     succeeded = failed = skipped = 0
+    successful_projects: List[Project] = []
     unavailable: Set[Project] = set()
     if options.jobs == 1 or len(projects) == 1 or options.fail_fast:
         if options.fail_fast and options.jobs > 1:
@@ -1327,6 +1420,7 @@ def execute_projects(
             status = run_project(project, options, report)
             if status == 0:
                 succeeded += 1
+                successful_projects.append(project)
             else:
                 failed += 1
                 unavailable.add(project)
@@ -1379,6 +1473,7 @@ def execute_projects(
                     for project, status in results:
                         if status == 0:
                             succeeded += 1
+                            successful_projects.append(project)
                         else:
                             failed += 1
                             unavailable.add(project)
@@ -1389,6 +1484,8 @@ def execute_projects(
         f"전체: {len(projects)}  {GREEN}성공: {succeeded}{NC}  "
         f"{RED}실패: {failed}{NC}  {YELLOW}건너뜀: {skipped}{NC}"
     )
+    if not options.dry_run:
+        open_artifact_directories(successful_projects)
     return 0 if failed == 0 else 1
 
 
