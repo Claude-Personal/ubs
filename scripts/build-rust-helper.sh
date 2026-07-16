@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/native/ubs-helper/Cargo.toml"
 OUTPUT_DIR="$ROOT/.ubs/bin"
+EXE_SUFFIX=""
+[ "${OS:-}" = "Windows_NT" ] && EXE_SUFFIX=".exe"
 
 command -v cargo >/dev/null 2>&1 || {
   echo "Rust helper 빌드에는 cargo가 필요합니다." >&2
@@ -13,6 +15,6 @@ command -v cargo >/dev/null 2>&1 || {
 
 cargo build --release --locked --manifest-path "$MANIFEST"
 mkdir -p "$OUTPUT_DIR"
-cp "$ROOT/native/ubs-helper/target/release/ubs-helper" "$OUTPUT_DIR/ubs-helper"
-chmod 755 "$OUTPUT_DIR/ubs-helper"
-echo "Rust helper 설치 완료: $OUTPUT_DIR/ubs-helper"
+cp "$ROOT/native/ubs-helper/target/release/ubs-helper$EXE_SUFFIX" "$OUTPUT_DIR/ubs-helper$EXE_SUFFIX"
+chmod 755 "$OUTPUT_DIR/ubs-helper$EXE_SUFFIX"
+echo "Rust helper 설치 완료: $OUTPUT_DIR/ubs-helper$EXE_SUFFIX"

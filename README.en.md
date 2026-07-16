@@ -14,7 +14,7 @@
 
 Universal Build Script decides whether the current directory is one project or a monorepo, detects buildable projects, removes nested duplicates, and dispatches each project to an ecosystem adapter.
 
-Since 3.0, `build.sh` is a thin compatibility entry point. Python 3 owns discovery, audits, planning, process orchestration, JSON, and reports. Bash adapters execute ecosystem CLIs. An optional Rust helper provides native SHA-256 and safe-relative-path validation for updates.
+Since 3.0, `build.sh` is a thin compatibility entry point. In 3.1, Python also owns Node/Gradle execution, dependency-input caching, and bounded project scheduling. Bash remains for Flutter/Tauri platform work and install/recovery compatibility. The optional Rust helper compares and verifies an update manifest in one process.
 
 | Concern | Default behavior |
 |---|---|
@@ -34,7 +34,7 @@ Install into an application root or monorepo root:
 curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
 ```
 
-Python 3 is required. Rust is optional:
+Python 3.9 or newer is required. Rust is optional:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
@@ -123,11 +123,13 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    E["Stable ./build.sh entry point"] --> S["Bash: options, processes, adapters"]
-    S --> P["Python 3: JSON, plist, parsing, reports"]
+    E["Thin ./build.sh entry point"] --> P["Python 3: options, discovery, planning, scheduling, Node, Gradle"]
+    P --> S["Bash: Flutter, Tauri, install, recovery"]
+    P --> N["Node package manager"]
+    P --> G["Gradle Wrapper / Gradle"]
     S --> F["Flutter CLI"]
-    S --> T["Node package manager + Tauri/Cargo"]
-    S --> G["Gradle Wrapper / Gradle"]
+    S --> T["Tauri/Cargo + Apple tooling"]
+    P --> R["Rust: batch manifest hashing and verification"]
     P --> J["Machine-readable contract"]
     F --> A["Artifacts"]
     T --> A
@@ -136,7 +138,7 @@ flowchart TB
     A --> C
 ```
 
-The project is intentionally not shell-only. Bash remains a portable entry point, Python handles structured data, and ecosystem CLIs own compilation and optimization. When built, the Rust helper is preferred for updater hashing and path validation; otherwise the portable shell hash fallback remains available.
+The project is intentionally not shell-only. Use `--jobs N` for bounded independent-project concurrency. Node installs default to `UBS_INSTALL_MODE=auto`, which skips a repeated install when package and lock inputs are unchanged; use `always` to force it. Rust batch verification avoids one helper process per managed file, with a portable fallback when the helper is absent.
 
 ### Monorepo failure policy
 

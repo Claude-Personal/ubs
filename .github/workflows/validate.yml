@@ -24,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.9"
 
       - name: Validate Bash syntax
         run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
@@ -35,6 +35,8 @@ jobs:
       - name: Run behavior tests
         run: |
           bash tests/test-detection.sh
+          bash tests/test-install.sh
+          bash tests/test-python-adapters.sh
           bash tests/test-update.sh
 
       - name: Validate Rust helper

@@ -14,7 +14,7 @@
 
 脚本会判断当前目录是单项目还是 monorepo，检测可构建项目，排除嵌套重复项，并把每个项目交给对应的生态适配器。
 
-从 3.0 开始，`build.sh` 是轻量兼容入口。Python 3 负责检测、审计、计划、进程编排、JSON 与报告；Bash 适配器执行各生态 CLI。可选 Rust helper 为更新提供原生 SHA-256 与安全相对路径校验。
+3.1 继续保留轻量 `build.sh` 入口，由 Python 3 负责检测、计划、Node/Gradle 执行、依赖输入缓存和受限并行调度。Bash 保留 Flutter/Tauri 与安装恢复逻辑，Rust helper 一次完成整个 manifest 的比较和验证。
 
 | 维度 | 默认行为 |
 |---|---|
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./build.sh
 ```
 
-Python 3 为必需项，Rust 为可选项：
+需要 Python 3.9 或更高版本，Rust 为可选项：
 
 ```bash
 ./scripts/build-rust-helper.sh
@@ -94,18 +94,20 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    E["./build.sh"] --> S["Bash：参数、进程、适配器"]
-    S --> P["Python 3：JSON、plist、安全解析、报告"]
+    E["轻量 ./build.sh"] --> P["Python 3：参数、检测、计划、并行、Node、Gradle"]
+    P --> S["Bash：Flutter、Tauri、安装、恢复"]
+    P --> N["Node package manager"]
+    P --> G["Gradle"]
     S --> F["Flutter CLI"]
-    S --> T["Node + Tauri/Cargo"]
-    S --> G["Gradle"]
+    S --> T["Tauri/Cargo + Apple tooling"]
+    P --> R["Rust：manifest 批量 hash 与验证"]
     P --> J["机器可读 JSON"]
     F --> A["构建产物"]
     T --> A
     G --> A
 ```
 
-项目并非强制使用纯 Shell。Bash 保持轻量兼容入口，Python 负责结构化数据，真正的编译和优化由各生态官方 CLI 完成。Rust helper 存在时优先用于更新哈希与路径校验，否则使用可移植 fallback。
+可用 `--jobs N` 对独立项目进行受限并行构建。Node 在 package/lock 输入未变化时跳过重复安装，使用 `UBS_INSTALL_MODE=always` 可强制重装。没有 Rust helper 时仍使用可移植 fallback。
 
 ### Monorepo 失败策略
 

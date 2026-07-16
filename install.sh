@@ -15,6 +15,7 @@ NC='\033[0m'
 
 REPO_RAW="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 FORCE="${UBS_FORCE:-false}"
+MANAGE_GITIGNORE="${UBS_MANAGE_GITIGNORE:-true}"
 
 echo -e "${CYAN}🚀 Universal Build Script Installer${NC}"
 echo "------------------------------------------------------------"
@@ -34,6 +35,19 @@ echo -e "${GREEN}✅ 설치 위치 타입: $PROJECT_TYPE${NC}"
 install_file() {
   local relative="$1"
   local destination="$relative"
+  local current="." component old_ifs install_tmp
+
+  old_ifs="$IFS"
+  IFS='/'
+  for component in $relative; do
+    current="$current/$component"
+    if [ -L "$current" ]; then
+      IFS="$old_ifs"
+      echo -e "${RED}거부: 심볼릭 링크 설치 경로 $relative${NC}" >&2
+      return 1
+    fi
+  done
+  IFS="$old_ifs"
 
   if [ -f "$destination" ] && [ "$FORCE" != "true" ]; then
     echo -e "${YELLOW}유지: $destination (갱신하려면 UBS_FORCE=true)${NC}"
@@ -41,14 +55,38 @@ install_file() {
   fi
 
   mkdir -p "$(dirname "$destination")"
-  curl -fsSL "$REPO_RAW/$relative" -o "$destination"
-  case "$destination" in *.sh) chmod +x "$destination" ;; esac
+  install_tmp="$(mktemp "$destination.ubs-install.XXXXXX")"
+  if ! curl -fsSL "$REPO_RAW/$relative" -o "$install_tmp"; then
+    rm -f "$install_tmp"
+    return 1
+  fi
+  case "$destination" in *.sh) chmod +x "$install_tmp" ;; esac
+  mv -f "$install_tmp" "$destination"
   echo -e "${GREEN}설치: $destination${NC}"
 }
+
+ensure_gitignore() {
+  [ "$MANAGE_GITIGNORE" = "true" ] || return 0
+  if [ -f .gitignore ] && grep -Fq '# BEGIN Universal Build Script' .gitignore; then
+    return 0
+  fi
+  [ ! -L .gitignore ] || { echo -e "${RED}.gitignore 심볼릭 링크는 수정하지 않습니다.${NC}" >&2; return 1; }
+  {
+    printf '\n# BEGIN Universal Build Script\n'
+    printf '%s\n' '.ubs/' '.env' '.env.*' '!.env.example' '!.env.*.example'
+    printf '%s\n' 'signing/' '*.p12' '*.p8' '*.pem' '*.key' '*.cer' '*.mobileprovision' '*.provisionprofile' '*.entitlements'
+    printf '%s\n' '*.jks' '*.keystore' 'key.properties' 'local.properties' 'GoogleService-Info.plist' 'google-services.json'
+    printf '# END Universal Build Script\n'
+  } >> .gitignore
+  echo -e "${GREEN}보호 규칙: .gitignore UBS 블록${NC}"
+}
+
+ensure_gitignore
 
 # 모든 어댑터를 설치해야 모노레포 루트에서 서로 다른 프로젝트를 함께 빌드할 수 있다.
 install_file "VERSION"
 install_file "build.sh"
+install_file "install.sh"
 install_file "scripts/ubs.py"
 install_file "scripts/bootstrap-update.sh"
 install_file "scripts/build-rust-helper.sh"

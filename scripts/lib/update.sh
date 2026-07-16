@@ -157,7 +157,8 @@ ubs_run_update() {
   local root="$1" check_only="$2" dry_run="$3"
   local base_url manifest_url temp_dir manifest remote_version="" seen=""
   local kind value relative extra expected actual local_version changed_count=0
-  local required timestamp backup_dir destination install_tmp mode version_order lock_dir i
+  local required timestamp backup_dir destination install_tmp mode version_order lock_dir i changed_file helper_dir root_helper_dir
+  local rust_batch=false rust_source_changed=false
   local -a paths hashes changed_paths installed_paths
 
   command -v curl >/dev/null 2>&1 || { echo "업데이트에는 curl이 필요합니다." >&2; return 1; }
@@ -257,18 +258,38 @@ ubs_run_update() {
 
   for ((i = 0; i < ${#paths[@]}; i++)); do
     relative="${paths[$i]}"
-    expected="${hashes[$i]}"
     if ! ubs_update_safe_destination "$root" "$relative"; then
       rm -rf "$temp_dir"
       return 1
     fi
-    actual=""
-    [ -f "$root/$relative" ] && actual="$(ubs_update_sha256 "$root/$relative")"
-    if [ "$actual" != "$expected" ]; then
-      changed_paths+=("$relative")
-      changed_count=$((changed_count + 1))
-    fi
   done
+
+  if [ -n "${UBS_RUST_HELPER:-}" ] && [ -x "$UBS_RUST_HELPER" ]; then
+    changed_file="$temp_dir/changed-paths.txt"
+    if "$UBS_RUST_HELPER" changed-manifest "$manifest" "$root" > "$changed_file" 2>/dev/null; then
+      rust_batch=true
+      while IFS= read -r relative; do
+        [ -n "$relative" ] || continue
+        changed_paths+=("$relative")
+        changed_count=$((changed_count + 1))
+      done < "$changed_file"
+    else
+      echo "Rust helper가 batch manifest 명령을 지원하지 않아 portable hash fallback을 사용합니다." >&2
+    fi
+  fi
+
+  if [ "$rust_batch" != true ]; then
+    for ((i = 0; i < ${#paths[@]}; i++)); do
+      relative="${paths[$i]}"
+      expected="${hashes[$i]}"
+      actual=""
+      [ -f "$root/$relative" ] && actual="$(ubs_update_sha256 "$root/$relative")"
+      if [ "$actual" != "$expected" ]; then
+        changed_paths+=("$relative")
+        changed_count=$((changed_count + 1))
+      fi
+    done
+  fi
 
   echo "Universal Build Script: local=$local_version remote=$remote_version"
   if [ "$changed_count" -eq 0 ]; then
@@ -320,13 +341,21 @@ ubs_run_update() {
       rm -rf "$temp_dir"
       return 1
     fi
-    actual="$(ubs_update_sha256 "$temp_dir/stage/$relative")" || { rm -rf "$temp_dir"; return 1; }
-    if [ "$actual" != "$expected" ]; then
-      echo "SHA-256 불일치: $relative" >&2
-      rm -rf "$temp_dir"
-      return 1
+    if [ "$rust_batch" != true ]; then
+      actual="$(ubs_update_sha256 "$temp_dir/stage/$relative")" || { rm -rf "$temp_dir"; return 1; }
+      if [ "$actual" != "$expected" ]; then
+        echo "SHA-256 불일치: $relative" >&2
+        rm -rf "$temp_dir"
+        return 1
+      fi
     fi
   done
+  if [ "$rust_batch" = true ] && \
+     ! "$UBS_RUST_HELPER" verify-manifest "$manifest" "$temp_dir/stage" "${changed_paths[@]}"; then
+    echo "Rust batch manifest 검증에 실패했습니다." >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
 
   timestamp="$(date '+%Y%m%d-%H%M%S')-$$"
   backup_dir="$root/.ubs/backups/$timestamp"
@@ -382,7 +411,25 @@ ubs_run_update() {
       return 1
     fi
     installed_paths+=("$relative")
+    case "$relative" in
+      native/ubs-helper/*|scripts/build-rust-helper.sh) rust_source_changed=true ;;
+    esac
   done
+
+  helper_dir=""
+  root_helper_dir=""
+  [ -z "${UBS_RUST_HELPER:-}" ] || helper_dir="$(cd "$(dirname "$UBS_RUST_HELPER")" 2>/dev/null && pwd -P || true)"
+  [ ! -d "$root/.ubs/bin" ] || root_helper_dir="$(cd "$root/.ubs/bin" && pwd -P)"
+  if [ "$rust_source_changed" = true ] && \
+     [ -n "$helper_dir" ] && [ "$helper_dir" = "$root_helper_dir" ]; then
+    if command -v cargo >/dev/null 2>&1; then
+      if ! bash "$root/scripts/build-rust-helper.sh"; then
+        echo "경고: 관리 파일은 갱신됐지만 Rust helper 재빌드에 실패했습니다. portable fallback을 사용할 수 있습니다." >&2
+      fi
+    else
+      echo "경고: Rust helper 소스가 갱신됐지만 cargo가 없어 바이너리를 재빌드하지 못했습니다." >&2
+    fi
+  fi
 
   ubs_update_cleanup
   UBS_UPDATE_CLEANUP_TEMP=""

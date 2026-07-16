@@ -9,15 +9,22 @@ planning, process orchestration, JSON output, and build reports.
 from __future__ import annotations
 
 import datetime as dt
+from concurrent.futures import as_completed, ThreadPoolExecutor
+from functools import lru_cache
 import glob
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +34,10 @@ EXCLUDED_DIRS = {
 }
 FLUTTER_PLATFORM_DIRS = {"android", "ios", "macos", "linux", "windows", "web"}
 GRADLE_NAMES = {"build.gradle", "build.gradle.kts"}
+NODE_LOCKS = (
+    "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+    "package-lock.json", "npm-shrinkwrap.json",
+)
 MARKER_NAMES = {
     "pubspec.yaml", "tauri.conf.json", "settings.gradle",
     "settings.gradle.kts", "package.json",
@@ -34,13 +45,17 @@ MARKER_NAMES = {
 ADAPTERS = {
     "tauri": "scripts/build-tauri.sh",
     "flutter": "scripts/build-flutter.sh",
-    "android": "scripts/build-gradle.sh",
-    "kotlin-multiplatform": "scripts/build-gradle.sh",
-    "kotlin": "scripts/build-gradle.sh",
-    "gradle": "scripts/build-gradle.sh",
-    "react": "scripts/build-node.sh",
-    "next": "scripts/build-node.sh",
-    "node": "scripts/build-node.sh",
+    "android": "scripts/ubs.py#gradle",
+    "kotlin-multiplatform": "scripts/ubs.py#gradle",
+    "kotlin": "scripts/ubs.py#gradle",
+    "gradle": "scripts/ubs.py#gradle",
+    "react": "scripts/ubs.py#node",
+    "next": "scripts/ubs.py#node",
+    "node": "scripts/ubs.py#node",
+}
+PYTHON_ADAPTER_TYPES = {
+    "android", "kotlin-multiplatform", "kotlin", "gradle",
+    "react", "next", "node",
 }
 
 GREEN = "\033[0;32m"
@@ -75,6 +90,7 @@ USAGE = """Universal Build Script
   --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
   --fail-fast
+  --jobs N                            독립 프로젝트 제한 병렬 빌드
   --report-json <파일>               실제 빌드 결과 JSON 저장
 
 지원 타입:
@@ -105,6 +121,7 @@ class Options:
     type_filter: str = ""
     project_path: Optional[Path] = None
     report_json: Optional[Path] = None
+    jobs: int = field(default_factory=lambda: int(os.environ.get("UBS_JOBS", "1")))
     update_check: bool = False
     update_prune_days: Optional[int] = None
 
@@ -138,20 +155,202 @@ def gradle_files(directory: Path, max_depth: int = 3) -> List[Path]:
     return files
 
 
+@lru_cache(maxsize=256)
+def catalog_plugin_accessors(directory: Path) -> Dict[str, Set[str]]:
+    plugins: Dict[str, Set[str]] = {}
+    catalog = directory / "gradle" / "libs.versions.toml"
+    in_plugins = False
+    for line in read_text(catalog).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_plugins = stripped == "[plugins]"
+            continue
+        if not in_plugins or not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        match = re.search(r"\bid\s*=\s*[\"']([^\"']+)", value)
+        if not match:
+            match = re.search(r"^\s*[\"']([^\"']+)[\"']", value)
+        if not match:
+            continue
+        accessor = re.sub(r"[-_.]+", ".", key.strip())
+        plugins.setdefault(match.group(1), set()).add(accessor)
+    return plugins
+
+
+def uses_catalog_plugin(gradle_text: str, accessors: Iterable[str]) -> bool:
+    return any(re.search(
+        rf"alias\s*\(\s*libs\.plugins\.{re.escape(accessor)}\s*\)",
+        gradle_text,
+    ) for accessor in accessors)
+
+
+@lru_cache(maxsize=256)
+def gradle_evidence(directory: Path, max_depth: int = 3) -> tuple[str, Dict[str, Set[str]]]:
+    combined = "\n".join(read_text(path) for path in gradle_files(directory, max_depth))
+    return combined, catalog_plugin_accessors(directory)
+
+
+def has_gradle_plugin(directory: Path, plugin_id: str) -> bool:
+    combined, catalog = gradle_evidence(directory)
+    if re.search(rf"[\"']?{re.escape(plugin_id)}[\"']?", combined):
+        return True
+    return uses_catalog_plugin(combined, catalog.get(plugin_id, set()))
+
+
 def detect_gradle_type(directory: Path) -> Optional[str]:
-    texts = [read_text(path) for path in gradle_files(directory)]
-    if not texts:
+    combined, catalog = gradle_evidence(directory)
+    if not combined:
         return None
-    combined = "\n".join(texts)
-    if re.search(r"com\.android\.(application|library)", combined):
+    if re.search(r"com\.android\.(application|library)", combined) or any(
+        uses_catalog_plugin(combined, catalog.get(plugin_id, set()))
+        for plugin_id in ("com.android.application", "com.android.library")
+    ):
         return "android"
-    if re.search(r"multiplatform|org\.jetbrains\.kotlin\.multiplatform", combined):
+    if re.search(r"multiplatform|org\.jetbrains\.kotlin\.multiplatform", combined) or \
+            uses_catalog_plugin(combined, catalog.get("org.jetbrains.kotlin.multiplatform", set())):
         return "kotlin-multiplatform"
-    if re.search(r"org\.jetbrains\.kotlin|kotlin.*(jvm|android)", combined):
+    if re.search(r"org\.jetbrains\.kotlin|kotlin.*(jvm|android)", combined) or any(
+        uses_catalog_plugin(combined, accessors)
+        for plugin_id, accessors in catalog.items()
+        if plugin_id.startswith("org.jetbrains.kotlin")
+    ):
         return "kotlin"
     return "gradle"
 
 
+def read_package(directory: Path) -> dict:
+    try:
+        value = json.loads((directory / "package.json").read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def detect_node_package_manager(directory: Path) -> str:
+    declared = read_package(directory).get("packageManager", "")
+    if isinstance(declared, str):
+        manager = declared.split("@", 1)[0]
+        if manager in {"npm", "pnpm", "yarn", "bun"}:
+            return manager
+    if (directory / "pnpm-lock.yaml").is_file():
+        return "pnpm"
+    if (directory / "yarn.lock").is_file():
+        return "yarn"
+    if (directory / "bun.lock").is_file() or (directory / "bun.lockb").is_file():
+        return "bun"
+    return "npm"
+
+
+def dependency_digest(directory: Path, manager: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(manager.encode())
+    for name in ("package.json", *NODE_LOCKS):
+        path = directory / name
+        if path.is_file():
+            digest.update(name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def node_install_command(directory: Path, manager: str) -> List[str]:
+    if manager == "pnpm":
+        return ["pnpm", "install", "--frozen-lockfile"] if (directory / "pnpm-lock.yaml").is_file() else ["pnpm", "install"]
+    if manager == "yarn":
+        if (directory / ".yarnrc.yml").is_file():
+            return ["yarn", "install", "--immutable"]
+        return ["yarn", "install", "--frozen-lockfile"] if (directory / "yarn.lock").is_file() else ["yarn", "install"]
+    if manager == "bun":
+        locked = (directory / "bun.lock").is_file() or (directory / "bun.lockb").is_file()
+        return ["bun", "install", "--frozen-lockfile"] if locked else ["bun", "install"]
+    locked = (directory / "package-lock.json").is_file() or (directory / "npm-shrinkwrap.json").is_file()
+    return ["npm", "ci", "--no-fund", "--no-audit"] if locked else ["npm", "install", "--no-fund", "--no-audit"]
+
+
+def run_command(command: Sequence[str], directory: Path, environment: Dict[str, str]) -> int:
+    return subprocess.run(list(command), cwd=directory, env=environment, check=False).returncode
+
+
+def install_node_dependencies(directory: Path, manager: str, environment: Dict[str, str]) -> int:
+    if environment.get("UBS_SKIP_INSTALL", "false") == "true":
+        print(f"{CYAN}Node 의존성 설치를 건너뜁니다 (UBS_SKIP_INSTALL=true).{NC}")
+        return 0
+    mode = environment.get("UBS_INSTALL_MODE", "auto")
+    if mode not in {"auto", "always"}:
+        eprint(f"{RED}UBS_INSTALL_MODE은 auto 또는 always여야 합니다: {mode}{NC}")
+        return 2
+    stamp = directory / "node_modules" / ".ubs-install-sha256"
+    expected = dependency_digest(directory, manager)
+    if mode == "auto" and read_text(stamp).strip() == expected:
+        print(f"{CYAN}의존성 입력이 변경되지 않아 {manager} install을 생략합니다.{NC}")
+        return 0
+    status = run_command(node_install_command(directory, manager), directory, environment)
+    if status == 0:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(expected + "\n", encoding="utf-8")
+    return status
+
+
+def run_node_adapter(directory: Path, environment: Dict[str, str]) -> int:
+    manager = detect_node_package_manager(directory)
+    if shutil.which(manager, path=environment.get("PATH")) is None:
+        eprint(f"{RED}{manager} 패키지 매니저가 필요합니다.{NC}")
+        return 1
+    script = environment.get("UBS_NODE_BUILD_SCRIPT", "build")
+    started = time.monotonic()
+    print(f"{CYAN}Node 프로젝트 빌드 ({manager}, script={script}){NC}")
+    status = install_node_dependencies(directory, manager, environment)
+    if status == 0:
+        status = run_command([manager, "run", script], directory, environment)
+    if status == 0:
+        print(f"{GREEN}Node 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+    return status
+
+
+def gradle_command(directory: Path) -> Optional[List[str]]:
+    wrapper = directory / "gradlew"
+    if wrapper.is_file() and os.access(wrapper, os.X_OK):
+        return [str(wrapper)]
+    windows_wrapper = directory / "gradlew.bat"
+    if os.name == "nt" and windows_wrapper.is_file():
+        return ["cmd", "/c", str(windows_wrapper)]
+    executable = shutil.which("gradle")
+    return [executable] if executable else None
+
+
+def run_gradle_adapter(kind: str, directory: Path, environment: Dict[str, str]) -> int:
+    command = gradle_command(directory)
+    if not command:
+        eprint(f"{RED}Gradle Wrapper 또는 gradle 명령이 필요합니다.{NC}")
+        return 1
+    task_value = environment.get("UBS_GRADLE_TASK", "")
+    if task_value:
+        tasks = shlex.split(task_value)
+    elif kind == "android" and has_gradle_plugin(directory, "com.android.application"):
+        tasks = ["bundleRelease"]
+    else:
+        tasks = ["build"]
+    flags = shlex.split(environment.get("UBS_GRADLE_FLAGS", ""))
+    if environment.get("UBS_GRADLE_OPTIMIZE", "false") == "true":
+        flags = ["--build-cache", "--parallel", *flags]
+    full_command = [*command, *tasks, *flags]
+    started = time.monotonic()
+    print(f"{CYAN}Gradle 프로젝트 빌드: {' '.join(full_command)}{NC}")
+    status = run_command(full_command, directory, environment)
+    if status == 0:
+        print(f"{GREEN}Gradle 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+    return status
+
+
+def run_python_adapter(kind: str, directory: Path, environment: Dict[str, str]) -> int:
+    if kind in {"react", "next", "node"}:
+        return run_node_adapter(directory, environment)
+    if kind in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
+        return run_gradle_adapter(kind, directory, environment)
+    raise ValueError(f"Python adapter가 지원하지 않는 타입입니다: {kind}")
+
+
+@lru_cache(maxsize=512)
 def load_package(directory: Path) -> Optional[dict]:
     try:
         value = json.loads((directory / "package.json").read_text(encoding="utf-8"))
@@ -169,6 +368,7 @@ def package_dependencies(package: dict) -> Dict[str, object]:
     return dependencies
 
 
+@lru_cache(maxsize=512)
 def detect_project_type(directory: Path) -> Optional[str]:
     if (directory / "src-tauri" / "tauri.conf.json").is_file():
         return "tauri"
@@ -233,8 +433,8 @@ def projects_for_root(root: Path) -> List[Project]:
 
 
 def contains_gradle(directory: Path, pattern: str) -> bool:
-    regex = re.compile(pattern)
-    return any(regex.search(read_text(path)) for path in gradle_files(directory, 4))
+    combined, _ = gradle_evidence(directory, 4)
+    return bool(re.search(pattern, combined))
 
 
 def audit_item(project: Project, category: str, check: str, status: str, detail: str) -> dict:
@@ -352,6 +552,7 @@ class BuildReport:
     def __init__(self, path: Optional[Path]) -> None:
         self.path = path
         self.results: List[dict] = []
+        self.lock = threading.Lock()
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.write()
@@ -359,19 +560,22 @@ class BuildReport:
     def append(self, project: Project, status: int, planned: bool) -> None:
         if not self.path:
             return
-        self.results.append({
+        result = {
             "type": project.type,
             "project": str(project.path),
             "status": "planned" if planned else ("success" if status == 0 else "failed"),
             "exit_code": status,
             "artifacts": discover_artifacts(project) if status == 0 and not planned else [],
-        })
-        self.write()
+        }
+        with self.lock:
+            self.results.append(result)
+            self.write()
 
     def write(self) -> None:
         if not self.path:
             return
-        data = {"schema_version": 1, "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "results": self.results}
+        data = {"schema_version": 1, "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "results": sorted(self.results, key=lambda item: (item["project"], item["type"]))}
         temporary = self.path.with_name(self.path.name + ".tmp")
         temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, self.path)
@@ -408,7 +612,7 @@ def parse_options(argv: Sequence[str]) -> Options:
         elif value == "--skip-clean": options.skip_clean = True
         elif value == "--clean": options.skip_clean = False
         elif value == "--fail-fast": options.fail_fast = True
-        elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json"}:
+        elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs"}:
             index += 1
             if index >= len(args): raise ValueError(f"{value} 값이 필요합니다.")
             argument = args[index]
@@ -417,7 +621,10 @@ def parse_options(argv: Sequence[str]) -> Options:
             elif value == "--flutter-outputs": options.flutter_outputs = argument
             elif value == "--type": options.type_filter = argument
             elif value == "--project": options.project_path = Path(argument)
-            else: options.report_json = Path(argument).expanduser().absolute()
+            elif value == "--report-json": options.report_json = Path(argument).expanduser().absolute()
+            else:
+                try: options.jobs = int(argument)
+                except ValueError as error: raise ValueError("--jobs는 1 이상의 정수여야 합니다.") from error
         elif value in {"-h", "--help"}: options.command = "help"
         elif value.startswith("--"): raise ValueError(f"알 수 없는 옵션: {value}")
         else: options.root = Path(value)
@@ -434,10 +641,19 @@ def validate_options(options: Options) -> None:
         outputs = options.flutter_outputs.split(",")
         if not outputs or any(value not in {"appbundle", "apk", "ipa", "web"} for value in outputs):
             raise ValueError(f"잘못된 Flutter 출력: {options.flutter_outputs}")
+    if options.jobs < 1:
+        raise ValueError("--jobs는 1 이상의 정수여야 합니다.")
 
 
 def selected_projects(options: Options, root: Path) -> List[Project]:
-    projects = projects_for_root(root)
+    if options.project_path:
+        project_path = canonical_dir(options.project_path)
+        kind = detect_project_type(project_path)
+        projects = [Project(kind, project_path)] if kind else []
+    elif options.build_all:
+        projects = scan_projects(root)
+    else:
+        projects = projects_for_root(root)
     return [project for project in projects if not options.type_filter or project.type == options.type_filter]
 
 
@@ -446,13 +662,15 @@ def run_project(project: Project, options: Options, report: BuildReport) -> int:
     if not adapter_relative:
         eprint(f"{RED}지원하지 않는 프로젝트 타입입니다: {project.type}{NC}")
         return 1
-    adapter = RUNTIME_ROOT / adapter_relative
+    adapter_path = adapter_relative.split("#", 1)[0]
+    adapter = RUNTIME_ROOT / adapter_path
     if not adapter.is_file():
         eprint(f"{RED}빌드 어댑터가 없습니다: {adapter}{NC}")
         return 1
     print(f"{CYAN}▶ [{project.type}] {project.path}{NC}")
     if options.dry_run:
-        print(f"  (dry-run) bash {adapter}")
+        runtime = "python3" if project.type in PYTHON_ADAPTER_TYPES else "bash"
+        print(f"  (dry-run) {runtime} {adapter_relative}")
         if project.type == "flutter":
             print(f"  Flutter outputs={options.flutter_outputs} platform={options.flutter_platform} version-bump={options.version_bump}")
         report.append(project, 0, True)
@@ -467,9 +685,51 @@ def run_project(project: Project, options: Options, report: BuildReport) -> int:
         "UBS_SKIP_CLEAN": str(options.skip_clean).lower(),
         "UBS_RUNTIME_ROOT": str(RUNTIME_ROOT),
     })
-    status = subprocess.run(["bash", str(adapter)], cwd=project.path, env=environment, check=False).returncode
+    if project.type in PYTHON_ADAPTER_TYPES:
+        status = run_python_adapter(project.type, project.path, environment)
+    else:
+        status = subprocess.run(["bash", str(adapter)], cwd=project.path, env=environment, check=False).returncode
     report.append(project, status, False)
     return status
+
+
+def execute_projects(projects: Sequence[Project], options: Options, report: BuildReport) -> int:
+    if not projects:
+        eprint(f"{YELLOW}조건에 맞는 프로젝트가 없습니다.{NC}")
+        return 1
+    succeeded = failed = 0
+    if options.jobs == 1 or len(projects) == 1 or options.fail_fast:
+        if options.fail_fast and options.jobs > 1:
+            print(f"{YELLOW}--fail-fast에서는 결정적 중단을 위해 순차 실행합니다.{NC}")
+        for project in projects:
+            status = run_project(project, options, report)
+            if status == 0:
+                succeeded += 1
+            else:
+                failed += 1
+                eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+                if options.fail_fast:
+                    break
+    else:
+        workers = min(options.jobs, len(projects))
+        print(f"{CYAN}독립 프로젝트 {len(projects)}개를 최대 {workers}개씩 병렬 실행합니다.{NC}")
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ubs-build") as executor:
+            futures = {executor.submit(run_project, project, options, report): project for project in projects}
+            for future in as_completed(futures):
+                project = futures[future]
+                try:
+                    status = future.result()
+                except (OSError, ValueError) as error:
+                    eprint(f"{RED}✗ 빌드 실행 오류: [{project.type}] {error}{NC}")
+                    status = 1
+                if status == 0:
+                    succeeded += 1
+                else:
+                    failed += 1
+                    eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+    print("------------------------------------------------------------")
+    print(f"전체: {succeeded + failed}  {GREEN}성공: {succeeded}{NC}  {RED}실패: {failed}{NC}")
+    return 0 if failed == 0 else 1
 
 
 def run_update(options: Options) -> int:
@@ -478,7 +738,7 @@ def run_update(options: Options) -> int:
         eprint(f"업데이트 모듈을 찾을 수 없습니다: {update_lib}")
         return 1
     environment = os.environ.copy()
-    helper = RUNTIME_ROOT / ".ubs/bin/ubs-helper"
+    helper = RUNTIME_ROOT / ".ubs/bin" / ("ubs-helper.exe" if os.name == "nt" else "ubs-helper")
     if helper.is_file() and os.access(helper, os.X_OK):
         environment.setdefault("UBS_RUST_HELPER", str(helper))
     if options.update_prune_days is not None:
@@ -496,8 +756,22 @@ def run_update(options: Options) -> int:
         return subprocess.run(command, env=environment, check=False).returncode
     result = subprocess.run(command, env=environment, text=True, stdout=subprocess.PIPE, check=False)
     mode = "check" if options.update_check else ("dry-run" if options.dry_run else "apply")
-    print(json.dumps({"ok": result.returncode == 0, "status": result.returncode,
-                      "mode": mode, "output": result.stdout.splitlines()}, ensure_ascii=False, indent=2))
+    lines = result.stdout.splitlines()
+    local_version = remote_version = backup_path = None
+    changed_paths = []
+    for line in lines:
+        version_match = re.match(r"Universal Build Script: local=(\S+) remote=(\S+)", line)
+        if version_match:
+            local_version, remote_version = version_match.groups()
+        elif line.startswith("  - "):
+            changed_paths.append(line[4:])
+        elif line.startswith("백업 위치: "):
+            backup_path = line.removeprefix("백업 위치: ")
+    print(json.dumps({"schema_version": 1, "ok": result.returncode == 0,
+                      "status": result.returncode, "mode": mode,
+                      "local_version": local_version, "remote_version": remote_version,
+                      "changed_paths": changed_paths, "backup_path": backup_path,
+                      "output": lines}, ensure_ascii=False, indent=2))
     return result.returncode
 
 
@@ -521,8 +795,7 @@ def main(argv: Sequence[str]) -> int:
                 for project in projects: print(f"{project.type:<24}  {project.path}")
             if not projects: eprint("감지된 프로젝트가 없습니다.")
             return 0 if projects else 1
-        plan_root = canonical_dir(options.project_path) if options.project_path else root
-        projects = selected_projects(options, plan_root)
+        projects = selected_projects(options, root)
         if options.command == "audit":
             audits = [entry for project in projects for entry in audit_project(project)]
             if options.json_output: print(json.dumps(audits, ensure_ascii=False, indent=2))
@@ -544,33 +817,15 @@ def main(argv: Sequence[str]) -> int:
         if options.json_output:
             raise ValueError("--json은 detect, audit 또는 plan 명령에서 지원합니다.")
         report = BuildReport(options.report_json)
-        if options.project_path:
-            project_path = canonical_dir(options.project_path)
-            kind = detect_project_type(project_path)
-            if not kind:
-                eprint(f"{RED}프로젝트 타입을 감지할 수 없습니다: {project_path}{NC}")
-                return 1
-            return run_project(Project(kind, project_path), options, report)
-        direct = detect_project_type(root)
-        if direct and not options.build_all:
-            return run_project(Project(direct, root), options, report)
-        if not direct:
-            print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
-        projects = [project for project in scan_projects(root)
-                    if not options.type_filter or project.type == options.type_filter]
-        succeeded = failed = 0
-        for project in projects:
-            if run_project(project, options, report) == 0: succeeded += 1
-            else:
-                failed += 1
-                eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
-                if options.fail_fast: break
-        if not projects:
-            eprint(f"{YELLOW}조건에 맞는 프로젝트가 없습니다.{NC}")
+        projects = selected_projects(options, root)
+        if options.project_path and not projects:
+            eprint(f"{RED}프로젝트 타입을 감지할 수 없습니다: {options.project_path}{NC}")
             return 1
-        print("------------------------------------------------------------")
-        print(f"전체: {succeeded + failed}  {GREEN}성공: {succeeded}{NC}  {RED}실패: {failed}{NC}")
-        return 0 if failed == 0 else 1
+        if not options.project_path and not detect_project_type(root):
+            print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
+        if len(projects) == 1 and not options.build_all and options.jobs == 1:
+            return run_project(projects[0], options, report)
+        return execute_projects(projects, options, report)
     except (ValueError, OSError) as error:
         eprint(str(error))
         return 2 if isinstance(error, ValueError) else 1

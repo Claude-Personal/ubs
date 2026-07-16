@@ -5,11 +5,11 @@ description: Detect, audit, plan, update, and run release builds across Flutter,
 
 # Universal Build
 
-Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Treat its JSON output as the machine contract. The optional Rust helper is an updater optimization, not a prerequisite for normal builds.
+Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns Node/Gradle execution and bounded scheduling while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
 
 ## Locate the Build Root
 
-Find the nearest workspace directory containing both `build.sh` and `scripts/ubs.py`. Run all commands from that directory. If those files are absent, explain that the Universal Build Script is not installed instead of guessing build commands. `scripts/lib/detect.sh` and `scripts/lib/audit.sh` are retained only for legacy compatibility and regression tests.
+Find the nearest workspace directory containing `build.sh`. If `scripts/ubs.py` is also present, run commands from that directory. If `build.sh` exists but the Python core does not, inspect `VERSION`: a 2.x installation needs the documented one-time `UBS_FORCE=true` 3.x installer migration. If `build.sh` is absent, explain that Universal Build Script is not installed instead of guessing build commands. `scripts/lib/detect.sh`, `scripts/lib/audit.sh`, `scripts/build-node.sh`, and `scripts/build-gradle.sh` remain only as compatibility wrappers or regression-test surfaces.
 
 ## Follow the Safe Workflow
 
@@ -63,6 +63,8 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh .
 ```
 
 Prefer `--project PATH` for one detected project and `--all --type TYPE` for filtered monorepo builds. Use `--fail-fast` only when later independent projects should not continue after a failure.
+
+Use `--jobs N` only for projects known to be independent. Keep the default of one worker when builds share generated files or signing state. Node dependency installation is input-cached by default; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
 
 ## Interpret Claims Carefully
 

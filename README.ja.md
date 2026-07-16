@@ -14,7 +14,7 @@
 
 現在のディレクトリが単一プロジェクトかモノレポかを判定し、ビルド可能なプロジェクトを検出して、重複する内部プロジェクトを除外したうえで適切なアダプターを実行します。
 
-3.0 以降、`build.sh` は薄い互換エントリーポイントです。Python 3 が検出・監査・計画・プロセス制御・JSON レポートを担当し、Bash アダプターが各 CLI を実行します。選択型 Rust helper は更新時の SHA-256 と安全な相対パス検証を担当します。
+3.1 では `build.sh` を薄い入口として維持し、Python 3 が検出・計画・Node/Gradle 実行・依存入力 cache・制限付き並列処理を担当します。Bash は Flutter/Tauri と install/recovery、Rust helper は manifest 全体の一括比較・検証を担当します。
 
 | 観点 | 既定動作 |
 |---|---|
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./build.sh
 ```
 
-Python 3 は必須、Rust は任意です。
+Python 3.9 以上は必須、Rust は任意です。
 
 ```bash
 ./scripts/build-rust-helper.sh
@@ -94,18 +94,20 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    E["./build.sh"] --> S["Bash: 引数・プロセス・アダプター"]
-    S --> P["Python 3: JSON・plist・安全な解析・レポート"]
+    E["薄い ./build.sh"] --> P["Python 3: 引数・検出・計画・並列・Node・Gradle"]
+    P --> S["Bash: Flutter・Tauri・install・recovery"]
+    P --> N["Node package manager"]
+    P --> G["Gradle"]
     S --> F["Flutter CLI"]
-    S --> T["Node + Tauri/Cargo"]
-    S --> G["Gradle"]
+    S --> T["Tauri/Cargo + Apple tooling"]
+    P --> R["Rust: manifest 一括 hash・検証"]
     P --> J["機械可読 JSON"]
     F --> A["成果物"]
     T --> A
     G --> A
 ```
 
-Shell 単独には限定しません。Bash は互換性の高い薄い入口、Python は構造化データ、実際の最適化は各公式 CLI が担当します。Rust helper があれば更新 hash と path 検証に優先使用し、なければ portable fallback を使います。
+`--jobs N` で独立 project を制限付き並列実行できます。Node は package/lock 入力が同じ場合 install を省略し、`UBS_INSTALL_MODE=always` で再実行できます。Rust helper がなければ portable fallback を使います。
 
 ### モノレポの失敗ポリシー
 
