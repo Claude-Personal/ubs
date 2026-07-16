@@ -5,7 +5,7 @@ description: Detect, audit, plan, update, and run release builds across Flutter,
 
 # Universal Build
 
-Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns Node/Gradle execution and bounded scheduling while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
+Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns workspace-aware Node/Gradle execution, resolved plans, and conflict-group scheduling while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
 
 ## Locate the Build Root
 
@@ -64,7 +64,9 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh .
 
 Prefer `--project PATH` for one detected project and `--all --type TYPE` for filtered monorepo builds. Use `--fail-fast` only when later independent projects should not continue after a failure.
 
-Use `--jobs N` only for projects known to be independent. Keep the default of one worker when builds share generated files or signing state. Node dependency installation is input-cached by default; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
+`--jobs N` automatically serializes ancestor/descendant paths and projects sharing a Node workspace. Keep the default of one worker when separate workspaces share signing state or implicit external outputs. Node dependency installation is cached from workspace locks, configuration, patches, manager/runtime versions, and package manifests; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
+
+The installer stages and verifies the full immutable release before applying one transaction. Use `UBS_INSTALL_REF` only for an immutable reviewed tag or commit, never an arbitrary moving branch.
 
 ## Interpret Claims Carefully
 

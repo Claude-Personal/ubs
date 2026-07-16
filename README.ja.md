@@ -14,7 +14,7 @@
 
 現在のディレクトリが単一プロジェクトかモノレポかを判定し、ビルド可能なプロジェクトを検出して、重複する内部プロジェクトを除外したうえで適切なアダプターを実行します。
 
-3.1 では `build.sh` を薄い入口として維持し、Python 3 が検出・計画・Node/Gradle 実行・依存入力 cache・制限付き並列処理を担当します。Bash は Flutter/Tauri と install/recovery、Rust helper は manifest 全体の一括比較・検証を担当します。
+3.2 では `build.sh` を薄い入口として維持し、Python 3 が workspace 対応 Node/Gradle 実行、cache、競合 group、resolved plan を担当します。installer は release 全体を staging・SHA-256 検証して atomic transaction で適用し、Rust helper は update manifest を一括検証します。
 
 | 観点 | 既定動作 |
 |---|---|
@@ -44,7 +44,9 @@ Python 3.9 以上は必須、Rust は任意です。
 # または install.sh を UBS_BUILD_RUST_HELPER=true で実行
 ```
 
-> **2.x から 3.0 への更新:** `UBS_FORCE=true` で installer を一度実行してください。2.x updater はセキュリティ許可リストにない新規 Python/Rust path を意図的に拒否します。3.0 以降は `./build.sh update` が 24 個の管理ファイルを更新します。
+> **2.x から 3.x への更新:** `UBS_FORCE=true` で installer を一度実行してください。3.x 以降は `./build.sh update` が 24 個の管理ファイルを更新します。
+
+installer は不変の current release ref を既定で使います。`UBS_INSTALL_REF`、`UBS_JOBS`、`UBS_INSTALL_MODE`、`UBS_MANAGE_GITIGNORE`、`UBS_GRADLE_FLAGS`、`UBS_GRADLE_OPTIMIZE` を設定できます。
 
 成果物レポートを含む例:
 
@@ -270,7 +272,10 @@ MCP は任意 Shell を公開せず、workspace root、enum オプション、ti
 
 ```bash
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+python3 tests/test_python_core.py
 bash tests/test-detection.sh
+bash tests/test-install.sh
+bash tests/test-python-adapters.sh
 bash tests/test-update.sh
 bash tests/test-rust-helper.sh
 ```
@@ -279,7 +284,7 @@ bash tests/test-rust-helper.sh
 
 ## 既知の制限事項
 
-- プロジェクトはパス順の逐次実行で、依存グラフ・並列ビルドは未実装です。
+- 既定は逐次実行です。`--jobs N` は競合しない group を並列化し、祖先/子孫 path と同一 Node workspace は逐次化します。完全な依存 DAG は推論しません。
 - Xcode 専用ネイティブ iOS プロジェクトは検出しません。
 - Gradle flavor、カスタム task、KMP 配布 task は override が必要な場合があります。
 - Tauri JS 難読化は frontend の `dist/` を前提にします。

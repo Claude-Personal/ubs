@@ -7,7 +7,7 @@ Use this matrix when explaining `./build.sh audit` results.
 | Flutter AAB/APK/IPA | Release AOT, icon tree shaking | Adapter enforces `--obfuscate` and split debug info | Preserve symbol directories for crash analysis |
 | Flutter Web | Release compiler and tree shaking | Not supported by the native Dart obfuscation option | Minified web code is not proof of obfuscation |
 | Tauri Rust | Cargo release compilation; project may configure LTO/strip | Compiled native code, not guaranteed obfuscation | LTO and strip are reported separately |
-| Tauri frontend | Framework production build when recognized | Optional JS obfuscator only when configured | JS obfuscation can increase size or break runtime behavior |
+| Tauri frontend | Framework production build when recognized | Optional lockfile-installed JS obfuscator only when configured | Keep `javascript-obfuscator` pinned locally; JS obfuscation can increase size or break runtime behavior |
 | Android | R8/minify and resource shrinking when configured in release build type | R8 renaming when minify and rules are configured | Keep mapping files and test reflection/serialization |
 | Kotlin/JVM/KMP/Gradle | Project-specific Gradle release tasks | Not automatic | Inspect each target and packaging plugin |
 | React/Next/Node | Framework production minification/tree shaking when recognized | Not automatic | Minification and obfuscation are different guarantees |

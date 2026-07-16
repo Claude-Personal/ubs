@@ -14,7 +14,7 @@
 
 脚本会判断当前目录是单项目还是 monorepo，检测可构建项目，排除嵌套重复项，并把每个项目交给对应的生态适配器。
 
-3.1 继续保留轻量 `build.sh` 入口，由 Python 3 负责检测、计划、Node/Gradle 执行、依赖输入缓存和受限并行调度。Bash 保留 Flutter/Tauri 与安装恢复逻辑，Rust helper 一次完成整个 manifest 的比较和验证。
+3.2 继续保留轻量 `build.sh` 入口，由 Python 3 负责 workspace 感知的 Node/Gradle 执行、缓存、冲突分组和 resolved plan。安装器先 staging 并 SHA-256 验证完整 release，再以 atomic transaction 应用；Rust helper 批量验证 update manifest。
 
 | 维度 | 默认行为 |
 |---|---|
@@ -44,7 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 # 或以 UBS_BUILD_RUST_HELPER=true 运行 install.sh
 ```
 
-> **从 2.x 升级到 3.0：** 请使用 `UBS_FORCE=true` 运行一次安装器。2.x updater 会按安全白名单拒绝当时不存在的新 Python/Rust 路径。安装 3.0 后，`./build.sh update` 会管理完整的 24 文件运行时。
+> **从 2.x 升级到 3.x：** 请使用 `UBS_FORCE=true` 运行一次安装器。安装 3.x 后，`./build.sh update` 会管理完整的 24 文件运行时。
+
+安装器默认使用不可变的 current release ref。可配置 `UBS_INSTALL_REF`、`UBS_JOBS`、`UBS_INSTALL_MODE`、`UBS_MANAGE_GITIGNORE`、`UBS_GRADLE_FLAGS` 和 `UBS_GRADLE_OPTIMIZE`。
 
 构建指定产物并生成结构化报告：
 
@@ -280,7 +282,10 @@ MCP 应暴露受限的类型化工具，而不是任意 Shell。必须限制 wor
 
 ```bash
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+python3 tests/test_python_core.py
 bash tests/test-detection.sh
+bash tests/test-install.sh
+bash tests/test-python-adapters.sh
 bash tests/test-update.sh
 bash tests/test-rust-helper.sh
 ```
@@ -289,7 +294,7 @@ bash tests/test-rust-helper.sh
 
 ## 已知限制
 
-- 项目按路径顺序串行执行，尚无依赖图调度和并行构建。
+- 默认串行执行。`--jobs N` 并行运行无冲突分组，而祖先/子路径及共享 Node workspace 保持串行；尚不推断完整依赖 DAG。
 - 不检测仅使用 Xcode 的原生 iOS 项目。
 - Gradle flavor、自定义 release task、KMP 发布 task 可能需要覆盖配置。
 - Tauri JS 混淆假定前端输出目录为 `dist/`。

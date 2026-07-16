@@ -14,7 +14,7 @@
 
 Universal Build Script decides whether the current directory is one project or a monorepo, detects buildable projects, removes nested duplicates, and dispatches each project to an ecosystem adapter.
 
-Since 3.0, `build.sh` is a thin compatibility entry point. In 3.1, Python also owns Node/Gradle execution, dependency-input caching, and bounded project scheduling. Bash remains for Flutter/Tauri platform work and install/recovery compatibility. The optional Rust helper compares and verifies an update manifest in one process.
+In 3.2, `build.sh` remains thin while Python owns workspace-aware Node/Gradle execution, dependency caching, conflict grouping, and resolved plans. The installer stages and SHA-256 verifies the complete release before one atomic transaction. Bash remains for Flutter/Tauri platform work, and the optional Rust helper batch-verifies updates.
 
 | Concern | Default behavior |
 |---|---|
@@ -43,7 +43,9 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./scripts/build-rust-helper.sh
 ```
 
-> **Upgrading from 2.x to 3.0:** run the installer once with `UBS_FORCE=true`. The 2.x updater intentionally rejects newly introduced paths that were not in its security allowlist. After 3.0 is installed, `./build.sh update` manages the complete 24-file runtime bundle.
+> **Upgrading from 2.x to 3.x:** run the installer once with `UBS_FORCE=true`. The 2.x updater intentionally rejects newly introduced Python/Rust paths. After 3.x is installed, `./build.sh update` manages the complete 24-file runtime bundle.
+
+The transactional installer defaults to the immutable current release ref. `UBS_INSTALL_REF` selects another immutable ref. Key controls are `UBS_JOBS`, `UBS_INSTALL_MODE`, `UBS_MANAGE_GITIGNORE`, `UBS_GRADLE_FLAGS`, and `UBS_GRADLE_OPTIMIZE`.
 
 Inspect first, then build:
 
@@ -138,7 +140,7 @@ flowchart TB
     A --> C
 ```
 
-The project is intentionally not shell-only. Use `--jobs N` for bounded independent-project concurrency. Node installs default to `UBS_INSTALL_MODE=auto`, which skips a repeated install when package and lock inputs are unchanged; use `always` to force it. Rust batch verification avoids one helper process per managed file, with a portable fallback when the helper is absent.
+The project is intentionally not shell-only. Use `--jobs N` for bounded conflict-group concurrency. Node installs default to `UBS_INSTALL_MODE=auto`, which hashes workspace package/lock/config/patch and runtime inputs; use `always` to force it. Rust batch verification avoids one helper process per managed file, with a portable fallback when the helper is absent.
 
 ### Monorepo failure policy
 
@@ -326,7 +328,10 @@ An MCP wrapper should expose narrow typed tools for detect, audit, plan, and bui
 
 ```bash
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+python tests/test_python_core.py
 bash tests/test-detection.sh
+bash tests/test-install.sh
+bash tests/test-python-adapters.sh
 bash tests/test-update.sh
 bash tests/test-rust-helper.sh
 scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
@@ -345,7 +350,7 @@ Tests use temporary fixtures and mocked ecosystem commands. Real SDK builds, App
 
 ## Known limitations
 
-- Projects run sequentially in path order; dependency graph scheduling and parallel builds are not implemented.
+- Builds are sequential by default. `--jobs N` runs non-overlapping groups concurrently while ancestor/descendant paths and a shared Node workspace stay serialized; a complete ecosystem dependency DAG is not inferred.
 - Xcode-only native iOS projects are not detected.
 - Gradle flavors, custom release tasks, and KMP deployment tasks may require overrides.
 - Tauri JS obfuscation assumes a `dist/` frontend output.

@@ -34,6 +34,7 @@ jobs:
 
       - name: Run behavior tests
         run: |
+          python tests/test_python_core.py
           bash tests/test-detection.sh
           bash tests/test-install.sh
           bash tests/test-python-adapters.sh
@@ -81,27 +82,55 @@ jobs:
                   assert f"]({link})" in text, f"{document} is missing language link {link}"
               assert text.count("```mermaid") >= 6, f"{document} needs at least six diagrams"
               assert text.count("```") % 2 == 0, f"unbalanced code fences: {document}"
+              for required in (
+                  "UBS_JOBS", "UBS_INSTALL_MODE", "UBS_MANAGE_GITIGNORE",
+                  "UBS_GRADLE_FLAGS", "tests/test-install.sh",
+                  "tests/test-python-adapters.sh",
+              ):
+                  assert required in text, f"{document} is missing 3.2 reference {required}"
           print("multilingual README and Mermaid diagrams are valid")
           PY
 
       - name: Validate AI skill metadata
         run: |
-          python -m pip install --disable-pip-version-check PyYAML
           python - <<'PY'
           from pathlib import Path
-          import yaml
+          import re
 
           skill_text = Path("skills/universal-build/SKILL.md").read_text(encoding="utf-8")
           _, frontmatter, body = skill_text.split("---", 2)
-          skill = yaml.safe_load(frontmatter)
-          interface = yaml.safe_load(
-              Path("skills/universal-build/agents/openai.yaml").read_text(encoding="utf-8")
-          )
+          interface = Path("skills/universal-build/agents/openai.yaml").read_text(encoding="utf-8")
 
-          assert skill["name"] == "universal-build"
-          assert skill["description"]
+          assert re.search(r"(?m)^name:\s*universal-build\s*$", frontmatter)
+          assert re.search(r"(?m)^description:\s*\S", frontmatter)
           assert body.strip()
-          assert interface["interface"]["display_name"] == "Universal Build"
-          assert "$universal-build" in interface["interface"]["default_prompt"]
+          assert 'display_name: "Universal Build"' in interface
+          assert "$universal-build" in interface
           print("AI skill metadata is valid")
           PY
+
+  python-core-cross-platform:
+    name: python-core (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Validate Python core behavior
+        run: python tests/test_python_core.py
