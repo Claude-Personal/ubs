@@ -116,6 +116,7 @@ import json, sys
 items = json.load(sys.stdin)
 assert len(items) == 5
 by_type = {item["type"]: item for item in items}
+assert by_type["tauri"]["adapter"] == "scripts/build-tauri.sh"
 assert by_type["tauri"]["options"]["skip_install"] is True
 assert by_type["tauri"]["options"]["obfuscate_js"] is True
 assert by_type["android"]["options"]["gradle_task"] == "assembleRelease"
@@ -132,6 +133,17 @@ assert len(items) == 1
 assert items[0]["type"] == "react"
 assert items[0]["path"].endswith("/apps/web")
 '
+
+REPORT_PATH="$FIXTURE/dry-run-report.json"
+bash "$REPO_DIR/build.sh" build --all --dry-run --report-json "$REPORT_PATH" "$FIXTURE" >/dev/null
+python3 - "$REPORT_PATH" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["schema_version"] == 1
+assert len(data["results"]) == 5
+assert all(item["status"] == "planned" for item in data["results"])
+assert all(item["artifacts"] == [] for item in data["results"])
+PY
 
 DRY_RUN="$(bash "$REPO_DIR/build.sh" build --all --dry-run "$FIXTURE")"
 DRY_COUNT=$(printf '%s\n' "$DRY_RUN" | grep -c '(dry-run)')
@@ -228,6 +240,18 @@ grep -Fq 'build web --release' "$FIXTURE/flutter-outputs.log" || {
   exit 1
 }
 
+: > "$FIXTURE/flutter-ipa.log"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-ipa.log" \
+  UBS_RUNTIME_ROOT="$REPO_DIR" UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none \
+  UBS_FLUTTER_OUTPUTS=ipa UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fq -- "--export-options-plist=$REPO_DIR/templates/flutter/ExportOptions.plist" \
+  "$FIXTURE/flutter-ipa.log" || {
+  echo "앱 전용 plist가 없을 때 UBS Flutter 템플릿을 사용하지 않았습니다." >&2
+  exit 1
+}
+
 printf '%s\n' 'version: 1.0.0+1' 'dependencies:' '  flutter:' '    sdk: flutter' \
   > "$FIXTURE/apps/mobile/pubspec.yaml"
 rm -f "$FIXTURE/apps/mobile/.env"
@@ -243,7 +267,24 @@ grep -Fqx 'version: 1.0.0+1' "$FIXTURE/apps/mobile/pubspec.yaml" || {
   exit 1
 }
 
-# Tauri 어댑터는 macOS 전용이므로 CI 운영체제와 무관하게 macOS 분기를 검증한다.
+# Linux/Windows 계열에서는 기본 Tauri 번들을 허용하고 Apple 서명만 제한한다.
+printf '%s\n' '#!/usr/bin/env bash' 'echo Linux' > "$FIXTURE/bin/uname"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "$1 $2" = "run tauri" ]; then mkdir -p "src-tauri/target/release/bundle/deb"; : > "src-tauri/target/release/bundle/deb/Desktop.deb"; fi' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/uname" "$FIXTURE/bin/npm"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-linux.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri.sh"
+[ -f "$FIXTURE/apps/desktop/src-tauri/target/release/bundle/deb/Desktop.deb" ] || {
+  echo "Linux Tauri 기본 번들이 유지되지 않았습니다." >&2
+  exit 1
+}
+
+# macOS 전용 Apple 서명과 .pkg 분기를 운영체제와 무관하게 검증한다.
 printf '%s\n' '#!/usr/bin/env bash' 'echo Darwin' > "$FIXTURE/bin/uname"
 chmod +x "$FIXTURE/bin/uname"
 

@@ -54,6 +54,7 @@ install_file "scripts/lib/audit.sh"
 install_file "scripts/lib/node-package-manager.sh"
 install_file "scripts/lib/update.sh"
 install_file "scripts/build-flutter.sh"
+install_file "scripts/build-tauri.sh"
 install_file "scripts/build-tauri-macos.sh"
 install_file "scripts/build-gradle.sh"
 install_file "scripts/build-node.sh"
@@ -62,6 +63,7 @@ install_file "scripts/TAURI_VERSION"
 install_file "skills/universal-build/SKILL.md"
 install_file "skills/universal-build/agents/openai.yaml"
 install_file "skills/universal-build/references/optimization.md"
+install_file "templates/flutter/ExportOptions.plist"
 
 if [ "$PROJECT_TYPE" = "flutter" ]; then
   if [ ! -f ".env.example" ]; then
@@ -74,7 +76,7 @@ if [ "$PROJECT_TYPE" = "flutter" ]; then
     echo -e "${YELLOW}주의: dart-define 값은 앱에 포함될 수 있으므로 비밀키를 넣지 마세요.${NC}"
   fi
   if [ -d "ios" ] && [ ! -f "ios/ExportOptions.plist" ]; then
-    curl -fsSL "$REPO_RAW/ios/ExportOptions.plist" -o ios/ExportOptions.plist
+    curl -fsSL "$REPO_RAW/templates/flutter/ExportOptions.plist" -o ios/ExportOptions.plist
     echo -e "${GREEN}생성: ios/ExportOptions.plist${NC}"
   fi
 fi

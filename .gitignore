@@ -1,1 +1,50 @@
+# Universal Build Script state and generated reports
 .ubs/
+
+# Local environment and signing configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+signing/
+*.p12
+*.p8
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.entitlements
+*.jks
+*.keystore
+key.properties
+local.properties
+GoogleService-Info.plist
+google-services.json
+ios/ExportOptions.plist
+
+# Build outputs and dependency caches
+build/
+dist/
+target/
+node_modules/
+.dart_tool/
+.gradle/
+.next/
+DerivedData/
+*.xcarchive
+*.dSYM/
+*.ipa
+*.apk
+*.aab
+*.pkg
+*.dmg
+*.msi
+*.deb
+*.exe
+
+# Local logs and OS/editor files
+*.log
+.DS_Store
+.idea/
+.vscode/
