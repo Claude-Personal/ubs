@@ -92,6 +92,47 @@ assert by_check[("android", "r8-rules")] == "configured"
 assert by_check[("react", "javascript")] == "not-configured"
 '
 
+PLAN_JSON="$(bash "$REPO_DIR/build.sh" plan --json --type flutter \
+  --flutter-outputs appbundle,web "$FIXTURE")"
+printf '%s' "$PLAN_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 1
+item = items[0]
+assert item["type"] == "flutter"
+assert item["adapter"] == "scripts/build-flutter.sh"
+assert item["options"]["outputs"] == "appbundle,web"
+assert item["options"]["output_selection"] == "explicit"
+assert item["options"]["platform"] is None
+assert item["options"]["skip_clean"] is True
+assert item["options"]["version_bump"] == "none"
+'
+
+PLAN_ALL_JSON="$(UBS_SKIP_INSTALL=true TAURI_OBFUSCATE_JS=true \
+  UBS_GRADLE_TASK=assembleRelease UBS_NODE_BUILD_SCRIPT=build:production \
+  bash "$REPO_DIR/build.sh" plan --json "$FIXTURE")"
+printf '%s' "$PLAN_ALL_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 5
+by_type = {item["type"]: item for item in items}
+assert by_type["tauri"]["options"]["skip_install"] is True
+assert by_type["tauri"]["options"]["obfuscate_js"] is True
+assert by_type["android"]["options"]["gradle_task"] == "assembleRelease"
+assert by_type["react"]["options"]["build_script"] == "build:production"
+assert by_type["react"]["options"]["skip_install"] is True
+'
+
+PLAN_PROJECT_JSON="$(bash "$REPO_DIR/build.sh" plan --json \
+  --project "$FIXTURE/apps/web" "$FIXTURE")"
+printf '%s' "$PLAN_PROJECT_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 1
+assert items[0]["type"] == "react"
+assert items[0]["path"].endswith("/apps/web")
+'
+
 DRY_RUN="$(bash "$REPO_DIR/build.sh" build --all --dry-run "$FIXTURE")"
 DRY_COUNT=$(printf '%s\n' "$DRY_RUN" | grep -c '(dry-run)')
 [ "$DRY_COUNT" -eq 5 ] || {

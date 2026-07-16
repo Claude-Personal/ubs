@@ -2,10 +2,11 @@
 
 # Universal Build Script
 
-**`./build.sh` 하나로 Flutter·Tauri를 우선 감지하고 Android/Kotlin·React/Node 프로젝트까지 빌드하는 Bash 오케스트레이터**
+**`./build.sh` 하나로 Flutter·Tauri·Android/Kotlin·React/Node를 감지하고 사람·CI·AI/MCP가 같은 방식으로 빌드하는 오케스트레이터**
 
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
+[![Validate](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml/badge.svg)](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml)
 
 ![Flutter](https://img.shields.io/badge/Flutter-AAB%20%7C%20APK%20%7C%20IPA%20%7C%20Web-54C5F8?style=flat-square&logo=flutter)
 ![Tauri](https://img.shields.io/badge/Tauri-.app%20%7C%20.pkg-FFC131?style=flat-square&logo=tauri)
@@ -81,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 
 ## AI와 MCP 연동
 
-이 저장소에는 AI가 빌드 절차를 일관되게 수행하도록 [`skills/universal-build`](skills/universal-build/SKILL.md) 스킬이 포함되어 있습니다. Codex 같은 스킬 호환 에이전트에 이 폴더를 설치하거나 `SKILL.md`를 에이전트 지침으로 제공하면 `detect --json → audit --json → dry-run → 실제 build` 순서로 작업합니다.
+이 저장소에는 AI가 빌드 절차를 일관되게 수행하도록 [`skills/universal-build`](skills/universal-build/SKILL.md) 스킬이 포함되어 있습니다. Codex 같은 스킬 호환 에이전트에 이 폴더를 설치하거나 `SKILL.md`를 에이전트 지침으로 제공하면 `detect --json → audit --json → plan --json → 실제 build` 순서로 작업합니다.
 
 예시 프롬프트:
 
@@ -97,9 +98,10 @@ Flutter AAB와 Web을 버전 변경 없이 빌드해줘.
 ```bash
 ./build.sh detect --json /workspace
 ./build.sh audit --json /workspace
+./build.sh plan --json /workspace
 ```
 
-감지는 `{ "type", "path" }` 객체 배열을, 감사는 `{ "type", "path", "category", "check", "status", "detail" }` 객체 배열을 출력합니다. JSON은 stdout으로, 오류는 stderr로 분리됩니다. `--json`은 현재 `detect`와 `audit`에서만 지원합니다.
+감지는 `{ "type", "path" }` 객체 배열을, 감사는 `{ "type", "path", "category", "check", "status", "detail" }` 객체 배열을 출력합니다. 계획은 실행될 `{ "type", "path", "adapter", "options" }` 객체 배열을 반환합니다. 세 명령 모두 읽기 전용이며 JSON은 stdout, 오류는 stderr로 분리됩니다.
 
 ### MCP로 감쌀 때
 
@@ -109,7 +111,7 @@ Flutter AAB와 Web을 버전 변경 없이 빌드해줘.
 |---|---|---|
 | `detect_projects(root)` | `./build.sh detect --json ROOT` | 읽기 전용 |
 | `audit_build(root)` | `./build.sh audit --json ROOT` | 읽기 전용 정적 분석 |
-| `plan_build(root, options)` | `./build.sh --dry-run ... ROOT` | 읽기 전용 계획 |
+| `plan_build(root, options)` | `./build.sh plan --json ... ROOT` | 읽기 전용 구조화 계획 |
 | `run_build(root, options)` | `./build.sh ... ROOT` | 파일·버전·산출물을 변경할 수 있음 |
 
 MCP 구현에서는 허용된 workspace root, 옵션 enum, timeout, stdout/stderr, 종료 코드를 검증해야 합니다. `run_build`는 명시적인 사용자 의도가 있을 때만 호출하고, 셸 문자열·서명 비밀·배포 명령을 자유 형식 인자로 받지 않는 구성이 안전합니다.
@@ -175,6 +177,7 @@ flowchart TD
 # AI/CI용 JSON 감지와 최적화·난독화 감사
 ./build.sh detect --json
 ./build.sh audit --json
+./build.sh plan --json
 
 # 실제 실행 없이 계획 확인
 ./build.sh --dry-run
@@ -196,7 +199,8 @@ flowchart TD
 |---|---|
 | `detect [경로]` | 지정 경로 아래의 프로젝트 목록 출력 |
 | `audit [경로]` | 최적화·난독화 관련 설정을 정적으로 감사 |
-| `--json` | `detect`/`audit` 결과를 JSON 배열로 출력 |
+| `plan [경로]` | 어댑터와 적용 옵션을 실행 없이 계획 |
+| `--json` | `detect`/`audit`/`plan` 결과를 JSON 배열로 출력 |
 | `--dry-run` | 어댑터를 실행하지 않고 빌드 계획만 출력 |
 | `--interactive` | Flutter/Tauri 버전과 Flutter 플랫폼 선택 메뉴 사용 |
 | `--non-interactive` | 안전한 기본값으로 무인 실행. 현재 기본값 |
@@ -441,6 +445,8 @@ UBS_SKIP_INSTALL=true ./build.sh
 
 ```text
 Universal-Build-Script/
+├── .github/dependabot.yml            # 고정된 Actions 의존성 갱신
+├── .github/workflows/validate.yml   # Bash·동작·AI 스킬 CI 검증
 ├── build.sh                         # 사용자 진입점·실행 집계
 ├── install.sh                       # 전체 런타임 설치
 ├── scripts/
@@ -477,6 +483,7 @@ bash tests/test-detection.sh
 - 인자 없는 `./build.sh`의 모노레포 자동 전환
 - dry-run 프로젝트 수
 - JSON 감지 결과와 감사 스키마
+- JSON 계획의 어댑터·스택별 옵션
 - Flutter/Tauri/Android/React 감사 상태 판정
 - Android 기본 `bundleRelease` 선택
 - npm lock 파일의 `npm ci` 선택
@@ -569,7 +576,9 @@ UBS_TAURI_PACKAGE_MODE=signed ./build.sh
 - [x] 실패·취소 시 Flutter/Tauri 버전 복원
 - [x] Tauri `.env.macos` 안전 파싱
 - [x] AI 스킬과 MCP 래퍼용 JSON 감지·감사 계약
+- [x] AI/MCP용 읽기 전용 JSON 빌드 계획
 - [x] 스택별 최적화·난독화 정적 감사
+- [x] Bash 동작과 AI 스킬 메타데이터 GitHub Actions 검증
 - [ ] 프로젝트 의존성 그래프와 위상 정렬
 - [ ] 안전한 병렬 빌드
 - [ ] Tauri Windows/Linux 어댑터
