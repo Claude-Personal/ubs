@@ -17,6 +17,7 @@ mkdir -p \
   "$FIXTURE/apps/mobile/android/app" \
   "$FIXTURE/apps/android-app/app" \
   "$FIXTURE/apps/kmp" \
+  "$FIXTURE/apps/native-ios/Demo.xcodeproj" \
   "$FIXTURE/apps/web" \
   "$FIXTURE/apps/ignored-node"
 
@@ -41,8 +42,13 @@ printf '%s\n' 'plugins { id("com.android.application") }' \
 printf '%s\n' 'pluginManagement {}' > "$FIXTURE/apps/kmp/settings.gradle.kts"
 printf '%s\n' 'plugins { kotlin("multiplatform") }' > "$FIXTURE/apps/kmp/build.gradle.kts"
 
+printf '%s\n' 'SWIFT_OPTIMIZATION_LEVEL = -O;' 'STRIP_INSTALLED_PRODUCT = YES;' \
+  > "$FIXTURE/apps/native-ios/Demo.xcodeproj/project.pbxproj"
+
 printf '%s\n' '{"scripts":{"build":"vite build"},"dependencies":{"react":"latest"}}' \
   > "$FIXTURE/apps/web/package.json"
+printf '%s\n' '{"schema_version":1,"dependencies":{"apps/web":["apps/kmp"]}}' \
+  > "$FIXTURE/ubs.dependencies.json"
 printf '%s\n' '{"scripts":{"test":"node test.js"}}' \
   > "$FIXTURE/apps/ignored-node/package.json"
 
@@ -61,11 +67,12 @@ assert_line "tauri"$'\t'"$FIXTURE/apps/desktop"
 assert_line "flutter"$'\t'"$FIXTURE/apps/mobile"
 assert_line "android"$'\t'"$FIXTURE/apps/android-app"
 assert_line "kotlin-multiplatform"$'\t'"$FIXTURE/apps/kmp"
+assert_line "ios-xcode"$'\t'"$FIXTURE/apps/native-ios"
 assert_line "react"$'\t'"$FIXTURE/apps/web"
 
 COUNT=$(printf '%s\n' "$RESULT" | sed '/^$/d' | wc -l | tr -d ' ')
-[ "$COUNT" -eq 5 ] || {
-  echo "프로젝트 수가 예상과 다릅니다: expected=5 actual=$COUNT" >&2
+[ "$COUNT" -eq 6 ] || {
+  echo "프로젝트 수가 예상과 다릅니다: expected=6 actual=$COUNT" >&2
   printf '%s\n' "$RESULT" >&2
   exit 1
 }
@@ -74,8 +81,8 @@ DETECT_JSON="$(bash "$REPO_DIR/build.sh" detect --json "$FIXTURE")"
 printf '%s' "$DETECT_JSON" | python3 -c '
 import json, sys
 items = json.load(sys.stdin)
-assert len(items) == 5
-assert {item["type"] for item in items} == {"tauri", "flutter", "android", "kotlin-multiplatform", "react"}
+assert len(items) == 6
+assert {item["type"] for item in items} == {"tauri", "flutter", "android", "kotlin-multiplatform", "react", "ios-xcode"}
 '
 
 # 비정상 dependency 필드가 있어도 유효한 build script는 안전하게 Node로 감지한다.
@@ -103,6 +110,8 @@ assert by_check[("android", "android-minify")] == "configured"
 assert by_check[("android", "resource-shrinking")] == "configured"
 assert by_check[("android", "r8-rules")] == "configured"
 assert by_check[("react", "javascript")] == "not-configured"
+assert by_check[("ios-xcode", "release-archive")] == "enforced"
+assert by_check[("ios-xcode", "swift-optimization")] == "configured"
 '
 
 PLAN_JSON="$(bash "$REPO_DIR/build.sh" plan --json --type flutter \
@@ -127,7 +136,7 @@ PLAN_ALL_JSON="$(UBS_SKIP_INSTALL=true TAURI_OBFUSCATE_JS=true \
 printf '%s' "$PLAN_ALL_JSON" | python3 -c '
 import json, sys
 items = json.load(sys.stdin)
-assert len(items) == 5
+assert len(items) == 6
 by_type = {item["type"]: item for item in items}
 assert by_type["tauri"]["adapter"] == "scripts/build-tauri.sh"
 assert by_type["tauri"]["options"]["skip_install"] is True
@@ -135,6 +144,21 @@ assert by_type["tauri"]["options"]["obfuscate_js"] is True
 assert by_type["android"]["options"]["gradle_task"] == "assembleRelease"
 assert by_type["react"]["options"]["build_script"] == "build:production"
 assert by_type["react"]["options"]["skip_install"] is True
+assert by_type["react"]["depends_on"] == [by_type["kotlin-multiplatform"]["path"]]
+assert by_type["react"]["build_order"] > by_type["kotlin-multiplatform"]["build_order"]
+assert by_type["ios-xcode"]["options"]["configuration"] == "Release"
+assert by_type["ios-xcode"]["options"]["container_type"] == "project"
+'
+
+GRAPH_JSON="$(bash "$REPO_DIR/build.sh" graph --json "$FIXTURE")"
+printf '%s' "$GRAPH_JSON" | python3 -c '
+import json, sys
+graph = json.load(sys.stdin)
+assert graph["schema_version"] == 1
+assert len(graph["nodes"]) == 6
+edge = next(item for item in graph["edges"] if item["to"].endswith("/apps/web"))
+assert edge["from"].endswith("/apps/kmp")
+assert len(graph["layers"]) == 2
 '
 
 PLAN_PROJECT_JSON="$(bash "$REPO_DIR/build.sh" plan --json \
@@ -142,9 +166,11 @@ PLAN_PROJECT_JSON="$(bash "$REPO_DIR/build.sh" plan --json \
 printf '%s' "$PLAN_PROJECT_JSON" | python3 -c '
 import json, sys
 items = json.load(sys.stdin)
-assert len(items) == 1
-assert items[0]["type"] == "react"
-assert items[0]["path"].endswith("/apps/web")
+assert len(items) == 2
+by_type = {item["type"]: item for item in items}
+assert by_type["react"]["path"].endswith("/apps/web")
+assert by_type["kotlin-multiplatform"]["path"].endswith("/apps/kmp")
+assert by_type["react"]["depends_on"] == [by_type["kotlin-multiplatform"]["path"]]
 '
 
 REPORT_PATH="$FIXTURE/dry-run-report.json"
@@ -153,22 +179,22 @@ python3 - "$REPORT_PATH" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["schema_version"] == 1
-assert len(data["results"]) == 5
+assert len(data["results"]) == 6
 assert all(item["status"] == "planned" for item in data["results"])
 assert all(item["artifacts"] == [] for item in data["results"])
 PY
 
 DRY_RUN="$(bash "$REPO_DIR/build.sh" build --all --dry-run "$FIXTURE")"
 DRY_COUNT=$(printf '%s\n' "$DRY_RUN" | grep -c '(dry-run)')
-[ "$DRY_COUNT" -eq 5 ] || {
-  echo "dry-run 프로젝트 수가 예상과 다릅니다: expected=5 actual=$DRY_COUNT" >&2
+[ "$DRY_COUNT" -eq 6 ] || {
+  echo "dry-run 프로젝트 수가 예상과 다릅니다: expected=6 actual=$DRY_COUNT" >&2
   printf '%s\n' "$DRY_RUN" >&2
   exit 1
 }
 
 AUTO_DRY_RUN="$(bash "$REPO_DIR/build.sh" --dry-run "$FIXTURE")"
 AUTO_COUNT=$(printf '%s\n' "$AUTO_DRY_RUN" | grep -c '(dry-run)')
-[ "$AUTO_COUNT" -eq 5 ] || {
+[ "$AUTO_COUNT" -eq 6 ] || {
   echo "기본 명령이 모노레포 전체를 자동 선택하지 않았습니다." >&2
   printf '%s\n' "$AUTO_DRY_RUN" >&2
   exit 1
@@ -369,4 +395,4 @@ grep -Fq 'xattr -cr signing/App.provisionprofile' "$FIXTURE/tauri-signed.log" ||
   exit 1
 }
 
-echo "감지 테스트 통과 (5 projects)"
+echo "감지 테스트 통과 (6 projects)"

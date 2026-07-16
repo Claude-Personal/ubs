@@ -30,11 +30,12 @@ jobs:
         run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 
       - name: Validate Python core
-        run: python -m py_compile scripts/ubs.py
+        run: python -m py_compile scripts/ubs.py scripts/ubs_mcp.py tests/test_python_core.py tests/test_mcp.py
 
       - name: Run behavior tests
         run: |
           python tests/test_python_core.py
+          python tests/test_mcp.py
           bash tests/test-detection.sh
           bash tests/test-install.sh
           bash tests/test-python-adapters.sh
@@ -85,9 +86,11 @@ jobs:
               for required in (
                   "UBS_JOBS", "UBS_INSTALL_MODE", "UBS_MANAGE_GITIGNORE",
                   "UBS_GRADLE_FLAGS", "tests/test-install.sh",
-                  "tests/test-python-adapters.sh",
+                  "tests/test-python-adapters.sh", "graph --json",
+                  "ubs.dependencies.json", "ios-xcode", "scripts/ubs_mcp.py",
+                  "UBS_MCP_ROOT", "UBS_XCODE_SCHEME",
               ):
-                  assert required in text, f"{document} is missing 3.2 reference {required}"
+                  assert required in text, f"{document} is missing 3.3 reference {required}"
           print("multilingual README and Mermaid diagrams are valid")
           PY
 

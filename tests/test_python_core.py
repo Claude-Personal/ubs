@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,6 +21,17 @@ SPEC.loader.exec_module(ubs)
 
 
 class PythonCoreTests(unittest.TestCase):
+    def test_standard_streams_are_configured_for_utf8(self) -> None:
+        first = mock.Mock()
+        second = mock.Mock()
+        ubs.configure_standard_streams(first, second)
+        first.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace",
+        )
+        second.reconfigure.assert_called_once_with(
+            encoding="utf-8", errors="backslashreplace",
+        )
+
     def test_windows_gradle_arguments_preserve_backslashes(self) -> None:
         value = r'-PstoreFile=C:\Users\me\release.jks "-Pcache=C:\build cache"'
         self.assertEqual(
@@ -66,6 +78,163 @@ class PythonCoreTests(unittest.TestCase):
             data = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(len(data["results"]), len(projects))
             self.assertEqual(data["schema_version"], 1)
+
+    def test_node_dependencies_are_topologically_sorted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            core = root / "packages/core"
+            app = root / "apps/app"
+            core.mkdir(parents=True)
+            app.mkdir(parents=True)
+            (core / "package.json").write_text(
+                '{"name":"@demo/core","scripts":{"build":"true"}}', encoding="utf-8",
+            )
+            (app / "package.json").write_text(
+                '{"name":"@demo/app","dependencies":{"@demo/core":"workspace:*"},'
+                '"scripts":{"build":"true"}}', encoding="utf-8",
+            )
+            ubs.load_package.cache_clear()
+            projects = [ubs.Project("node", app), ubs.Project("node", core)]
+            graph = ubs.build_project_graph(projects, root)
+            layers = ubs.topological_layers(graph)
+            self.assertEqual(layers, [[ubs.Project("node", core)], [ubs.Project("node", app)]])
+            payload = ubs.graph_payload(graph)
+            self.assertEqual(payload["edges"], [{"from": str(core), "to": str(app)}])
+
+    def test_explicit_dependency_cycle_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            first, second = root / "a", root / "b"
+            first.mkdir()
+            second.mkdir()
+            (root / "ubs.dependencies.json").write_text(
+                '{"schema_version":1,"dependencies":{"a":["b"],"b":["a"]}}',
+                encoding="utf-8",
+            )
+            graph = ubs.build_project_graph(
+                [ubs.Project("node", first), ubs.Project("node", second)], root,
+            )
+            with self.assertRaisesRegex(ValueError, "순환"):
+                ubs.topological_layers(graph)
+
+    def test_missing_explicit_dependency_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            app = root / "app"
+            app.mkdir()
+            (root / "ubs.dependencies.json").write_text(
+                '{"schema_version":1,"dependencies":{"app":["missing"]}}', encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "감지되지 않았습니다"):
+                ubs.build_project_graph([ubs.Project("node", app)], root)
+
+    def test_flutter_path_and_gradle_composite_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            shared, flutter, gradle = root / "shared", root / "mobile", root / "android"
+            shared.mkdir()
+            flutter.mkdir()
+            gradle.mkdir()
+            (flutter / "pubspec.yaml").write_text(
+                "dependencies:\n  shared:\n    path: ../shared\n", encoding="utf-8",
+            )
+            (gradle / "settings.gradle").write_text(
+                "includeBuild '../shared'\n", encoding="utf-8",
+            )
+            projects = [
+                ubs.Project("flutter", flutter), ubs.Project("gradle", gradle),
+                ubs.Project("node", shared),
+            ]
+            graph = ubs.build_project_graph(projects, root)
+            self.assertEqual(graph.dependencies[projects[0]], {projects[2]})
+            self.assertEqual(graph.dependencies[projects[1]], {projects[2]})
+
+    def test_xcode_plan_uses_explicit_release_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "Demo.xcodeproj").mkdir()
+            environment = {
+                "UBS_XCODE_SCHEME": "DemoRelease",
+                "UBS_XCODE_CONFIGURATION": "Release",
+                "UBS_XCODE_EXPORT": "true",
+                "UBS_XCODE_FLAGS": "-allowProvisioningUpdates",
+            }
+            plan = ubs.xcode_plan(root, environment)
+            self.assertEqual(plan["container_type"], "project")
+            self.assertEqual(plan["scheme"], "DemoRelease")
+            self.assertEqual(plan["configuration"], "Release")
+            self.assertTrue(plan["export"])
+            self.assertEqual(plan["flags"], ["-allowProvisioningUpdates"])
+
+    def test_executor_waits_for_dependency_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            core, app = root / "core", root / "app"
+            core.mkdir()
+            app.mkdir()
+            (root / "ubs.dependencies.json").write_text(
+                '{"schema_version":1,"dependencies":{"app":["core"]}}', encoding="utf-8",
+            )
+            projects = [ubs.Project("node", app), ubs.Project("node", core)]
+            observed = []
+
+            def record(project, _options, _report):
+                observed.append(project.path.name)
+                return 0
+
+            options = ubs.Options(root=root, jobs=2)
+            with mock.patch.object(ubs, "run_project", side_effect=record):
+                status = ubs.execute_projects(projects, options, ubs.BuildReport(None), root)
+            self.assertEqual(status, 0)
+            self.assertEqual(observed, ["core", "app"])
+
+    def test_xcode_adapter_archives_with_discovered_scheme(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "Demo.xcodeproj").mkdir()
+            commands = []
+
+            def record(command, _directory, _environment):
+                commands.append(list(command))
+                return 0
+
+            with mock.patch.object(ubs.platform, "system", return_value="Darwin"), \
+                    mock.patch.object(ubs.shutil, "which", return_value="/usr/bin/xcodebuild"), \
+                    mock.patch.object(ubs, "discover_xcode_scheme", return_value="Demo"), \
+                    mock.patch.object(ubs, "run_command", side_effect=record):
+                status = ubs.run_xcode_adapter(root, {})
+            self.assertEqual(status, 0)
+            self.assertEqual(len(commands), 1)
+            self.assertIn("-project", commands[0])
+            self.assertIn("Demo", commands[0])
+            self.assertEqual(commands[0][-1], "archive")
+
+    def test_failed_dependency_does_not_block_independent_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            names = ("failed-core", "blocked-app", "good-core", "good-app")
+            paths = {name: root / name for name in names}
+            for path in paths.values():
+                path.mkdir()
+            (root / "ubs.dependencies.json").write_text(
+                '{"schema_version":1,"dependencies":{'
+                '"blocked-app":["failed-core"],"good-app":["good-core"]}}',
+                encoding="utf-8",
+            )
+            projects = [ubs.Project("node", paths[name]) for name in names]
+            observed = []
+
+            def record(project, _options, _report):
+                observed.append(project.path.name)
+                return 1 if project.path.name == "failed-core" else 0
+
+            with mock.patch.object(ubs, "run_project", side_effect=record):
+                status = ubs.execute_projects(
+                    projects, ubs.Options(root=root, jobs=2), ubs.BuildReport(None), root,
+                )
+            self.assertEqual(status, 1)
+            self.assertIn("good-app", observed)
+            self.assertNotIn("blocked-app", observed)
 
 
 if __name__ == "__main__":

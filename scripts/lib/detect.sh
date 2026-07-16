@@ -67,6 +67,13 @@ detect_project_type() {
     return 0
   fi
 
+  if find "$dir" -mindepth 1 -maxdepth 1 -type d \
+    \( -name '*.xcworkspace' -o -name '*.xcodeproj' \) -print -quit 2>/dev/null |
+    grep -q .; then
+    echo "ios-xcode"
+    return 0
+  fi
+
   if [ -f "$dir/gradlew" ] || [ -f "$dir/settings.gradle" ] || \
      [ -f "$dir/settings.gradle.kts" ] || [ -f "$dir/build.gradle" ] || \
      [ -f "$dir/build.gradle.kts" ]; then
@@ -119,6 +126,7 @@ scan_projects() {
   find "$root" \
     \( -type d \( -name .git -o -name node_modules -o -name build -o -name dist \
       -o -name target -o -name .gradle -o -name .dart_tool -o -name .next \) -prune \) \
+    -o \( -type d \( -name '*.xcworkspace' -o -name '*.xcodeproj' \) -print -prune \) \
     -o \( -type f \( -name pubspec.yaml -o -name tauri.conf.json \
       -o -name settings.gradle -o -name settings.gradle.kts -o -name package.json \) -print \) \
     2>/dev/null |
@@ -126,6 +134,9 @@ scan_projects() {
     case "$marker" in
       */src-tauri/tauri.conf.json)
         candidate="$(dirname "$(dirname "$marker")")"
+        ;;
+      *.xcworkspace|*.xcodeproj)
+        candidate="$(dirname "$marker")"
         ;;
       *) candidate="$(dirname "$marker")" ;;
     esac

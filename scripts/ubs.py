@@ -47,6 +47,7 @@ MARKER_NAMES = {
     "pubspec.yaml", "tauri.conf.json", "settings.gradle",
     "settings.gradle.kts", "package.json",
 }
+XCODE_SUFFIXES = (".xcworkspace", ".xcodeproj")
 ADAPTERS = {
     "tauri": "scripts/build-tauri.sh",
     "flutter": "scripts/build-flutter.sh",
@@ -57,10 +58,11 @@ ADAPTERS = {
     "react": "scripts/ubs.py#node",
     "next": "scripts/ubs.py#node",
     "node": "scripts/ubs.py#node",
+    "ios-xcode": "scripts/ubs.py#xcode",
 }
 PYTHON_ADAPTER_TYPES = {
     "android", "kotlin-multiplatform", "kotlin", "gradle",
-    "react", "next", "node",
+    "react", "next", "node", "ios-xcode",
 }
 
 GREEN = "\033[0;32m"
@@ -68,6 +70,24 @@ YELLOW = "\033[1;33m"
 RED = "\033[0;31m"
 CYAN = "\033[0;36m"
 NC = "\033[0m"
+
+
+def configure_standard_streams(
+    stdout: object = sys.stdout,
+    stderr: object = sys.stderr,
+) -> None:
+    """Make localized status output portable across Windows and redirected CI logs."""
+    for stream in (stdout, stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (LookupError, OSError, ValueError):
+                # Embedded interpreters and already-closed streams may reject changes.
+                pass
+
+
+configure_standard_streams()
 
 
 USAGE = """Universal Build Script
@@ -80,6 +100,7 @@ USAGE = """Universal Build Script
   ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
   ./build.sh plan [경로]             읽기 전용 빌드 계획
   ./build.sh plan --json [경로]      AI/MCP용 빌드 계획 JSON
+  ./build.sh graph --json [경로]     프로젝트 의존성·위상 정렬 JSON
   ./build.sh update --check [--json] 전체 런타임 업데이트 확인
   ./build.sh update --dry-run        변경 파일 미리 보기
   ./build.sh update                  검증·백업 후 안전 업데이트
@@ -100,7 +121,7 @@ USAGE = """Universal Build Script
 
 지원 타입:
   tauri, flutter, android, kotlin-multiplatform, kotlin, gradle,
-  react, next, node
+  react, next, node, ios-xcode
 """
 
 
@@ -443,11 +464,150 @@ def run_gradle_adapter(kind: str, directory: Path, environment: Dict[str, str]) 
     return status
 
 
+def xcode_container(directory: Path) -> Optional[tuple[str, Path]]:
+    workspaces = sorted(
+        (path for path in directory.glob("*.xcworkspace") if path.is_dir()),
+        key=lambda path: path.name,
+    )
+    if workspaces:
+        return "workspace", workspaces[0]
+    projects = sorted(
+        (path for path in directory.glob("*.xcodeproj") if path.is_dir()),
+        key=lambda path: path.name,
+    )
+    return ("project", projects[0]) if projects else None
+
+
+def xcode_selection_arguments(directory: Path) -> List[str]:
+    container = xcode_container(directory)
+    if not container:
+        raise ValueError(f"Xcode workspace/project를 찾을 수 없습니다: {directory}")
+    kind, path = container
+    return [f"-{kind}", str(path)]
+
+
+def discover_xcode_scheme(
+    executable: str, directory: Path, selection: Sequence[str], environment: Dict[str, str],
+) -> str:
+    explicit = environment.get("UBS_XCODE_SCHEME", "").strip()
+    if explicit:
+        return explicit
+    result = subprocess.run(
+        [executable, "-list", "-json", *selection], cwd=directory, env=environment,
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise ValueError("Xcode scheme 자동 감지에 실패했습니다. UBS_XCODE_SCHEME을 지정하세요.")
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError("xcodebuild -list JSON을 해석할 수 없습니다.") from error
+    schemes: List[str] = []
+    for section in ("workspace", "project"):
+        value = data.get(section)
+        if isinstance(value, dict) and isinstance(value.get("schemes"), list):
+            schemes.extend(item for item in value["schemes"] if isinstance(item, str))
+    schemes = sorted(set(schemes))
+    if len(schemes) == 1:
+        return schemes[0]
+    container = xcode_container(directory)
+    expected = container[1].stem if container else ""
+    if expected in schemes:
+        return expected
+    if not schemes:
+        raise ValueError("공유 Xcode scheme을 찾지 못했습니다. UBS_XCODE_SCHEME을 지정하세요.")
+    raise ValueError(
+        f"Xcode scheme이 여러 개입니다: {', '.join(schemes)}. UBS_XCODE_SCHEME을 지정하세요."
+    )
+
+
+def xcode_plan(directory: Path, environment: Dict[str, str]) -> dict:
+    def project_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        return path if path.is_absolute() else directory / path
+
+    selection = xcode_selection_arguments(directory)
+    container = xcode_container(directory)
+    scheme = environment.get("UBS_XCODE_SCHEME", "").strip() or (
+        container[1].stem if container else "auto"
+    )
+    configuration = environment.get("UBS_XCODE_CONFIGURATION", "Release")
+    archive_path = project_path(environment.get(
+        "UBS_XCODE_ARCHIVE_PATH", str(directory / "build" / "ubs" / f"{scheme}.xcarchive")
+    ))
+    export_enabled = environment.get("UBS_XCODE_EXPORT", "false") == "true"
+    export_options = project_path(environment.get(
+        "UBS_XCODE_EXPORT_OPTIONS", str(directory / "ExportOptions.plist")
+    ))
+    export_path = project_path(environment.get(
+        "UBS_XCODE_EXPORT_PATH", str(directory / "build" / "ubs" / "export")
+    ))
+    flags = split_cli_arguments(environment.get("UBS_XCODE_FLAGS", ""))
+    return {
+        "container_type": container[0] if container else None,
+        "container": str(container[1]) if container else None,
+        "selection_arguments": selection,
+        "scheme": scheme,
+        "configuration": configuration,
+        "archive_path": str(archive_path),
+        "export": export_enabled,
+        "export_options": str(export_options),
+        "export_path": str(export_path),
+        "flags": flags,
+    }
+
+
+def run_xcode_adapter(directory: Path, environment: Dict[str, str]) -> int:
+    if platform.system() != "Darwin":
+        eprint(f"{RED}Xcode iOS 빌드는 macOS에서만 실행할 수 있습니다.{NC}")
+        return 1
+    executable = shutil.which("xcodebuild", path=environment.get("PATH"))
+    if not executable:
+        eprint(f"{RED}xcodebuild를 찾을 수 없습니다. Xcode Command Line Tools가 필요합니다.{NC}")
+        return 1
+    try:
+        plan = xcode_plan(directory, environment)
+        selection = plan["selection_arguments"]
+        scheme = discover_xcode_scheme(executable, directory, selection, environment)
+    except ValueError as error:
+        eprint(f"{RED}{error}{NC}")
+        return 2
+    archive_path = Path(str(plan["archive_path"]))
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        executable, *selection, "-scheme", scheme,
+        "-configuration", str(plan["configuration"]),
+        "-archivePath", str(archive_path), *plan["flags"], "archive",
+    ]
+    started = time.monotonic()
+    print(f"{CYAN}Xcode archive 빌드: {' '.join(command)}{NC}")
+    status = run_command(command, directory, environment)
+    if status != 0:
+        return status
+    if plan["export"]:
+        export_options = Path(str(plan["export_options"]))
+        if not export_options.is_file():
+            eprint(f"{RED}ExportOptions.plist를 찾을 수 없습니다: {export_options}{NC}")
+            return 2
+        export_path = Path(str(plan["export_path"]))
+        export_path.mkdir(parents=True, exist_ok=True)
+        export_command = [
+            executable, "-exportArchive", "-archivePath", str(archive_path),
+            "-exportOptionsPlist", str(export_options), "-exportPath", str(export_path),
+        ]
+        status = run_command(export_command, directory, environment)
+    if status == 0:
+        print(f"{GREEN}Xcode 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+    return status
+
+
 def run_python_adapter(kind: str, directory: Path, environment: Dict[str, str]) -> int:
     if kind in {"react", "next", "node"}:
         return run_node_adapter(directory, environment)
     if kind in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
         return run_gradle_adapter(kind, directory, environment)
+    if kind == "ios-xcode":
+        return run_xcode_adapter(directory, environment)
     raise ValueError(f"Python adapter가 지원하지 않는 타입입니다: {kind}")
 
 
@@ -462,7 +622,7 @@ def load_package(directory: Path) -> Optional[dict]:
 
 def package_dependencies(package: dict) -> Dict[str, object]:
     dependencies: Dict[str, object] = {}
-    for key in ("dependencies", "devDependencies"):
+    for key in ("dependencies", "devDependencies", "optionalDependencies"):
         value = package.get(key)
         if isinstance(value, dict):
             dependencies.update(value)
@@ -476,6 +636,8 @@ def detect_project_type(directory: Path) -> Optional[str]:
     pubspec = directory / "pubspec.yaml"
     if pubspec.is_file() and re.search(r"sdk:\s*flutter|^\s*flutter:", read_text(pubspec), re.MULTILINE):
         return "flutter"
+    if xcode_container(directory):
+        return "ios-xcode"
     gradle_markers = (
         "gradlew", "settings.gradle", "settings.gradle.kts",
         "build.gradle", "build.gradle.kts",
@@ -533,8 +695,13 @@ def scan_projects(root: Path) -> List[Project]:
     root = canonical_dir(root)
     candidates = set()
     for current_text, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in EXCLUDED_DIRS]
         current = Path(current_text)
+        if any(name.endswith(XCODE_SUFFIXES) for name in dirs):
+            candidates.add(current.resolve())
+        dirs[:] = [
+            name for name in dirs
+            if name not in EXCLUDED_DIRS and not name.endswith(XCODE_SUFFIXES)
+        ]
         for name in files:
             if name not in MARKER_NAMES:
                 continue
@@ -631,6 +798,18 @@ def audit_project(project: Project) -> List[dict]:
         configured = bool(re.search(r"javascript-obfuscator|webpack-obfuscator|rollup-plugin-obfuscator", package))
         add("obfuscation", "javascript", "configured" if configured else "not-configured",
             "JS 난독화 패키지 감지" if configured else "minification은 난독화 보장이 아니며 별도 난독화 설정을 확인하지 못함")
+    elif kind == "ios-xcode":
+        project_settings = "\n".join(
+            read_text(path) for path in directory.glob("*.xcodeproj/project.pbxproj")
+        )
+        optimized = bool(re.search(r"SWIFT_OPTIMIZATION_LEVEL\s*=\s*(-O|-Osize|-Ounchecked)", project_settings))
+        stripped = bool(re.search(r"STRIP_INSTALLED_PRODUCT\s*=\s*YES", project_settings))
+        add("optimization", "release-archive", "enforced", "Release configuration으로 xcodebuild archive 실행")
+        add("optimization", "swift-optimization", "configured" if optimized else "project-default",
+            "Swift 최적화 레벨 감지" if optimized else "Release 기본값 또는 프로젝트 설정에 따름")
+        add("obfuscation", "native-symbol-strip", "configured" if stripped else "project-default",
+            "설치 제품 symbol strip 감지" if stripped else "Xcode Release 기본 strip 설정을 확인")
+        add("obfuscation", "swift-native", "compiled", "Swift/Objective-C 네이티브 컴파일은 별도 난독화 보장이 아님")
     return items
 
 
@@ -671,6 +850,8 @@ def plan_item(project: Project, options: Options) -> dict:
             "gradle_optimize": environment.get("UBS_GRADLE_OPTIMIZE", "false") == "true",
             "gradle_flags": split_cli_arguments(environment.get("UBS_GRADLE_FLAGS", "")),
         })
+    elif project.type == "ios-xcode":
+        values.update(xcode_plan(project.path, environment))
     else:
         workspace = node_workspace_root(project.path)
         manager = detect_node_package_manager(project.path)
@@ -694,8 +875,12 @@ ARTIFACT_PATTERNS = {
     "kotlin": ["**/build/libs/*.jar"],
     "gradle": ["**/build/libs/*"],
     "react": ["dist", "build"], "next": [".next"], "node": ["dist", "build"],
+    "ios-xcode": ["build/ubs/*.xcarchive", "build/ubs/export/*.ipa"],
 }
-DIRECTORY_PATTERNS = {"build/web", "dist", "build", ".next", "src-tauri/target/release/bundle/*/*"}
+DIRECTORY_PATTERNS = {
+    "build/web", "dist", "build", ".next", "src-tauri/target/release/bundle/*/*",
+    "build/ubs/*.xcarchive",
+}
 
 
 def discover_artifacts(project: Project) -> List[str]:
@@ -731,6 +916,21 @@ class BuildReport:
             self.results.append(result)
             self.write()
 
+    def append_skipped(self, project: Project, reason: str) -> None:
+        if not self.path:
+            return
+        result = {
+            "type": project.type,
+            "project": str(project.path),
+            "status": "skipped",
+            "exit_code": None,
+            "artifacts": [],
+            "reason": reason,
+        }
+        with self.lock:
+            self.results.append(result)
+            self.write()
+
     def write(self) -> None:
         if not self.path:
             return
@@ -745,8 +945,8 @@ def parse_options(argv: Sequence[str]) -> Options:
     args = list(argv)
     options = Options()
     if args and args[0] in {
-        "detect", "list", "audit", "plan", "update", "build",
-        "node-adapter", "gradle-adapter", "help", "-h", "--help",
+        "detect", "list", "audit", "plan", "graph", "update", "build",
+        "node-adapter", "gradle-adapter", "xcode-adapter", "help", "-h", "--help",
     }:
         first = args.pop(0)
         options.command = "detect" if first == "list" else ("help" if first in {"help", "-h", "--help"} else first)
@@ -812,12 +1012,198 @@ def selected_projects(options: Options, root: Path) -> List[Project]:
     if options.project_path:
         project_path = canonical_dir(options.project_path)
         kind = detect_project_type(project_path)
-        projects = [Project(kind, project_path)] if kind else []
+        target = Project(kind, project_path) if kind else None
+        available = scan_projects(root) if not detect_project_type(root) else projects_for_root(root)
+        if target and target not in available:
+            available.append(target)
+        projects = [target] if target else []
     elif options.build_all:
-        projects = scan_projects(root)
+        available = scan_projects(root)
+        projects = list(available)
     else:
-        projects = projects_for_root(root)
-    return [project for project in projects if not options.type_filter or project.type == options.type_filter]
+        available = projects_for_root(root)
+        projects = list(available)
+    selected = [
+        project for project in projects
+        if not options.type_filter or project.type == options.type_filter
+    ]
+    if options.command not in {"build", "plan", "graph"} or not selected:
+        return selected
+    if len(selected) == len(available):
+        return selected
+    graph = build_project_graph(available, root)
+    closure = set(selected)
+    pending = list(selected)
+    while pending:
+        project = pending.pop()
+        for dependency in graph.dependencies[project]:
+            if dependency not in closure:
+                closure.add(dependency)
+                pending.append(dependency)
+    return [project for project in available if project in closure]
+
+
+@dataclass
+class ProjectGraph:
+    root: Path
+    projects: List[Project]
+    dependencies: Dict[Project, Set[Project]]
+
+
+def flutter_path_dependencies(pubspec: Path) -> List[Path]:
+    text = read_text(pubspec)
+    values: List[Path] = []
+    section = ""
+    dependency_indent = -1
+    for raw in text.splitlines():
+        clean = raw.split("#", 1)[0].rstrip()
+        if not clean.strip():
+            continue
+        indent = len(clean) - len(clean.lstrip())
+        stripped = clean.strip()
+        if indent == 0:
+            section = stripped[:-1] if stripped.endswith(":") else ""
+            dependency_indent = -1
+            continue
+        if section not in {"dependencies", "dev_dependencies", "dependency_overrides"}:
+            continue
+        if stripped.endswith(":") and indent <= 2:
+            dependency_indent = indent
+            continue
+        if dependency_indent >= 0 and indent > dependency_indent and stripped.startswith("path:"):
+            value = stripped.split(":", 1)[1].strip().strip("\"'")
+            if value:
+                values.append((pubspec.parent / value).resolve())
+    return values
+
+
+def gradle_composite_dependencies(directory: Path) -> List[Path]:
+    values: List[Path] = []
+    for name in ("settings.gradle", "settings.gradle.kts"):
+        for match in re.finditer(
+            r"includeBuild\s*(?:\(\s*)?[\"']([^\"']+)[\"']", read_text(directory / name),
+        ):
+            values.append((directory / match.group(1)).resolve())
+    return values
+
+
+def explicit_dependency_entries(root: Path) -> Dict[Path, List[Path]]:
+    config = root / "ubs.dependencies.json"
+    if not config.is_file():
+        return {}
+    try:
+        value = json.loads(config.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"ubs.dependencies.json JSON 오류: {error}") from error
+    if not isinstance(value, dict) or value.get("schema_version", 1) != 1:
+        raise ValueError("ubs.dependencies.json schema_version은 1이어야 합니다.")
+    dependencies = value.get("dependencies")
+    if not isinstance(dependencies, dict):
+        raise ValueError("ubs.dependencies.json dependencies는 객체여야 합니다.")
+
+    def resolve_inside(relative: object) -> Path:
+        if not isinstance(relative, str) or not relative:
+            raise ValueError("ubs.dependencies.json 경로는 비어 있지 않은 문자열이어야 합니다.")
+        resolved = (root / relative).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as error:
+            raise ValueError(f"의존성 경로가 루트를 벗어납니다: {relative}") from error
+        return resolved
+
+    result: Dict[Path, List[Path]] = {}
+    for source, targets in dependencies.items():
+        source_path = resolve_inside(source)
+        if not isinstance(targets, list):
+            raise ValueError(f"의존성 목록은 배열이어야 합니다: {source}")
+        result[source_path] = [resolve_inside(target) for target in targets]
+    return result
+
+
+def build_project_graph(projects: Sequence[Project], root: Path) -> ProjectGraph:
+    root = root.resolve()
+    ordered = list(projects)
+    by_path = {project.path.resolve(): project for project in ordered}
+    dependencies: Dict[Project, Set[Project]] = {project: set() for project in ordered}
+
+    package_names: Dict[str, Project] = {}
+    for project in ordered:
+        package = load_package(project.path)
+        name = package.get("name") if package else None
+        if isinstance(name, str) and name:
+            if name in package_names and package_names[name] != project:
+                raise ValueError(f"중복 Node package name: {name}")
+            package_names[name] = project
+    for project in ordered:
+        package = load_package(project.path)
+        if package:
+            for name in package_dependencies(package):
+                dependency = package_names.get(name)
+                if dependency and dependency != project:
+                    dependencies[project].add(dependency)
+        if project.type == "flutter":
+            for path in flutter_path_dependencies(project.path / "pubspec.yaml"):
+                dependency = by_path.get(path)
+                if dependency and dependency != project:
+                    dependencies[project].add(dependency)
+        if project.type in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
+            for path in gradle_composite_dependencies(project.path):
+                dependency = by_path.get(path)
+                if dependency and dependency != project:
+                    dependencies[project].add(dependency)
+    for source_path, target_paths in explicit_dependency_entries(root).items():
+        source = by_path.get(source_path)
+        if not source:
+            continue
+        for target_path in target_paths:
+            target = by_path.get(target_path)
+            if not target:
+                raise ValueError(
+                    f"명시한 의존 프로젝트가 선택되지 않았거나 감지되지 않았습니다: "
+                    f"{source_path} -> {target_path}"
+                )
+            if target != source:
+                dependencies[source].add(target)
+    return ProjectGraph(root, ordered, dependencies)
+
+
+def topological_layers(graph: ProjectGraph) -> List[List[Project]]:
+    remaining = set(graph.projects)
+    layers: List[List[Project]] = []
+    while remaining:
+        ready = sorted(
+            (project for project in remaining if not (graph.dependencies[project] & remaining)),
+            key=lambda project: (str(project.path), project.type),
+        )
+        if not ready:
+            cycle = sorted(str(project.path) for project in remaining)
+            raise ValueError(f"프로젝트 의존성 순환을 감지했습니다: {', '.join(cycle)}")
+        layers.append(ready)
+        remaining.difference_update(ready)
+    return layers
+
+
+def graph_payload(graph: ProjectGraph) -> dict:
+    layers = topological_layers(graph)
+    levels = {project: index for index, layer in enumerate(layers) for project in layer}
+    nodes = []
+    edges = []
+    for project in sorted(graph.projects, key=lambda item: (str(item.path), item.type)):
+        depends_on = sorted(str(item.path) for item in graph.dependencies[project])
+        nodes.append({
+            "type": project.type,
+            "path": str(project.path),
+            "level": levels[project],
+            "depends_on": depends_on,
+        })
+        edges.extend({"from": dependency, "to": str(project.path)} for dependency in depends_on)
+    return {
+        "schema_version": 1,
+        "root": str(graph.root),
+        "nodes": nodes,
+        "edges": sorted(edges, key=lambda item: (item["from"], item["to"])),
+        "layers": [[str(project.path) for project in layer] for layer in layers],
+    }
 
 
 def projects_conflict(left: Project, right: Project) -> bool:
@@ -856,7 +1242,12 @@ def project_groups(projects: Sequence[Project]) -> List[List[Project]]:
     return list(groups.values())
 
 
-def resolved_plan_items(projects: Sequence[Project], options: Options) -> List[dict]:
+def resolved_plan_items(projects: Sequence[Project], options: Options, root: Path) -> List[dict]:
+    graph = build_project_graph(projects, root)
+    layers = topological_layers(graph)
+    build_orders = {
+        project: index for index, layer in enumerate(layers) for project in layer
+    }
     group_ids: Dict[Project, str] = {}
     for index, group in enumerate(project_groups(projects), 1):
         group_id = f"group-{index}:{group[0].path}"
@@ -866,6 +1257,8 @@ def resolved_plan_items(projects: Sequence[Project], options: Options) -> List[d
     for project in projects:
         item = plan_item(project, options)
         item["options"]["execution_group"] = group_ids[project]
+        item["depends_on"] = sorted(str(value.path) for value in graph.dependencies[project])
+        item["build_order"] = build_orders[project]
         items.append(item)
     return items
 
@@ -906,52 +1299,96 @@ def run_project(project: Project, options: Options, report: BuildReport) -> int:
     return status
 
 
-def execute_projects(projects: Sequence[Project], options: Options, report: BuildReport) -> int:
+def execute_projects(
+    projects: Sequence[Project], options: Options, report: BuildReport, root: Path,
+) -> int:
     if not projects:
         eprint(f"{YELLOW}조건에 맞는 프로젝트가 없습니다.{NC}")
         return 1
-    succeeded = failed = 0
+    graph = build_project_graph(projects, root)
+    layers = topological_layers(graph)
+    ordered_projects = [project for layer in layers for project in layer]
+    succeeded = failed = skipped = 0
+    unavailable: Set[Project] = set()
     if options.jobs == 1 or len(projects) == 1 or options.fail_fast:
         if options.fail_fast and options.jobs > 1:
             print(f"{YELLOW}--fail-fast에서는 결정적 중단을 위해 순차 실행합니다.{NC}")
-        for project in projects:
+        stopped = False
+        for project in ordered_projects:
+            blockers = graph.dependencies[project] & unavailable
+            if stopped or blockers:
+                skipped += 1
+                unavailable.add(project)
+                reason = "fail-fast" if stopped else "failed dependency: " + ", ".join(
+                    sorted(str(item.path) for item in blockers)
+                )
+                report.append_skipped(project, reason)
+                continue
             status = run_project(project, options, report)
             if status == 0:
                 succeeded += 1
             else:
                 failed += 1
+                unavailable.add(project)
                 eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
-                if options.fail_fast:
-                    break
+                stopped = options.fail_fast
     else:
-        groups = project_groups(projects)
-        workers = min(options.jobs, len(groups))
-        serialized = sum(1 for group in groups if len(group) > 1)
+        all_groups = [project_groups(layer) for layer in layers]
+        group_count = sum(len(groups) for groups in all_groups)
+        serialized = sum(
+            1 for groups in all_groups for group in groups if len(group) > 1
+        )
         print(
-            f"{CYAN}프로젝트 {len(projects)}개를 충돌 없는 {len(groups)}개 그룹으로 나눠 "
-            f"최대 {workers}개씩 병렬 실행합니다 (직렬 그룹 {serialized}개).{NC}"
+            f"{CYAN}프로젝트 {len(projects)}개를 위상 단계 {len(layers)}개, "
+            f"충돌 없는 그룹 {group_count}개로 나눠 최대 {options.jobs}개씩 병렬 실행합니다 "
+            f"(직렬 그룹 {serialized}개).{NC}"
         )
 
         def run_group(group: Sequence[Project]) -> List[tuple[Project, int]]:
             return [(project, run_project(project, options, report)) for project in group]
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ubs-build") as executor:
-            futures = {executor.submit(run_group, group): group for group in groups}
-            for future in as_completed(futures):
-                try:
-                    results = future.result()
-                except Exception as error:
-                    group = futures[future]
-                    eprint(f"{RED}✗ 빌드 그룹 실행 오류: {error}{NC}")
-                    results = [(project, 1) for project in group]
-                for project, status in results:
-                    if status == 0:
-                        succeeded += 1
-                    else:
-                        failed += 1
-                        eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+        for level, original_groups in enumerate(all_groups):
+            layer = [project for group in original_groups for project in group]
+            runnable = []
+            for project in layer:
+                blockers = graph.dependencies[project] & unavailable
+                if blockers:
+                    skipped += 1
+                    unavailable.add(project)
+                    reason = "failed dependency: " + ", ".join(
+                        sorted(str(item.path) for item in blockers)
+                    )
+                    report.append_skipped(project, reason)
+                    eprint(f"{YELLOW}↷ 빌드 건너뜀: [{project.type}] {project.path} ({reason}){NC}")
+                else:
+                    runnable.append(project)
+            groups = project_groups(runnable)
+            if not groups:
+                continue
+            workers = min(options.jobs, len(groups))
+            print(f"{CYAN}위상 단계 {level}: 프로젝트 {sum(map(len, groups))}개{NC}")
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ubs-build") as executor:
+                futures = {executor.submit(run_group, group): group for group in groups}
+                for future in as_completed(futures):
+                    try:
+                        results = future.result()
+                    except Exception as error:
+                        group = futures[future]
+                        eprint(f"{RED}✗ 빌드 그룹 실행 오류: {error}{NC}")
+                        results = [(project, 1) for project in group]
+                    for project, status in results:
+                        if status == 0:
+                            succeeded += 1
+                        else:
+                            failed += 1
+                            unavailable.add(project)
+                            eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+    skipped = max(skipped, len(projects) - succeeded - failed)
     print("------------------------------------------------------------")
-    print(f"전체: {succeeded + failed}  {GREEN}성공: {succeeded}{NC}  {RED}실패: {failed}{NC}")
+    print(
+        f"전체: {len(projects)}  {GREEN}성공: {succeeded}{NC}  "
+        f"{RED}실패: {failed}{NC}  {YELLOW}건너뜀: {skipped}{NC}"
+    )
     return 0 if failed == 0 else 1
 
 
@@ -1016,10 +1453,12 @@ def main(argv: Sequence[str]) -> int:
             return run_update(options)
         validate_options(options)
         root = canonical_dir(options.root)
-        if options.command in {"node-adapter", "gradle-adapter"}:
+        if options.command in {"node-adapter", "gradle-adapter", "xcode-adapter"}:
             environment = os.environ.copy()
             if options.command == "node-adapter":
                 return run_node_adapter(root, environment)
+            if options.command == "xcode-adapter":
+                return run_xcode_adapter(root, environment)
             detected = detect_project_type(root)
             kind = os.environ.get("UBS_PROJECT_TYPE", detected or "gradle")
             if kind not in {"android", "kotlin-multiplatform", "kotlin", "gradle"}:
@@ -1036,6 +1475,21 @@ def main(argv: Sequence[str]) -> int:
             if not projects: eprint("감지된 프로젝트가 없습니다.")
             return 0 if projects else 1
         projects = selected_projects(options, root)
+        if options.command == "graph":
+            graph = build_project_graph(projects, root)
+            payload = graph_payload(graph)
+            if options.json_output:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                for level, layer in enumerate(topological_layers(graph)):
+                    print(f"단계 {level}")
+                    for project in layer:
+                        dependencies = sorted(str(item.path) for item in graph.dependencies[project])
+                        suffix = f" <- {', '.join(dependencies)}" if dependencies else ""
+                        print(f"  [{project.type}] {project.path}{suffix}")
+            if not projects:
+                eprint("그래프로 표시할 프로젝트가 없습니다.")
+            return 0 if projects else 1
         if options.command == "audit":
             audits = [entry for project in projects for entry in audit_project(project)]
             if options.json_output: print(json.dumps(audits, ensure_ascii=False, indent=2))
@@ -1048,14 +1502,14 @@ def main(argv: Sequence[str]) -> int:
             return 0 if audits else 1
         if options.command == "plan":
             if options.json_output:
-                print(json.dumps(resolved_plan_items(projects, options), ensure_ascii=False, indent=2))
+                print(json.dumps(resolved_plan_items(projects, options, root), ensure_ascii=False, indent=2))
             else:
                 report = BuildReport(None)
                 for project in projects: run_project(project, Options(**{**options.__dict__, "dry_run": True}), report)
             if not projects: eprint("계획할 프로젝트가 없습니다.")
             return 0 if projects else 1
         if options.json_output:
-            raise ValueError("--json은 detect, audit 또는 plan 명령에서 지원합니다.")
+            raise ValueError("--json은 detect, audit, plan 또는 graph 명령에서 지원합니다.")
         report = BuildReport(options.report_json)
         projects = selected_projects(options, root)
         if options.project_path and not projects:
@@ -1065,7 +1519,7 @@ def main(argv: Sequence[str]) -> int:
             print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
         if len(projects) == 1 and not options.build_all and options.jobs == 1:
             return run_project(projects[0], options, report)
-        return execute_projects(projects, options, report)
+        return execute_projects(projects, options, report, root)
     except (ValueError, OSError) as error:
         eprint(str(error))
         return 2 if isinstance(error, ValueError) else 1
