@@ -27,7 +27,7 @@ if "$HELPER" validate-relative "../escape" >/dev/null 2>&1; then
   exit 1
 fi
 
-printf '%s\n' 'version 3.2.0' \
+printf '%s\n' 'version 3.3.0' \
   'file ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad abc.txt' \
   > "$FIXTURE/manifest.txt"
 [ -z "$("$HELPER" changed-manifest "$FIXTURE/manifest.txt" "$FIXTURE")" ] || {

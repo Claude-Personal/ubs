@@ -8,7 +8,7 @@ UBS_UPDATE_RELEASE_ROOT="https://raw.githubusercontent.com/kimdzhekhon/Universal
 
 ubs_update_allowed_path() {
   case "$1" in
-    VERSION|build.sh|install.sh|scripts/ubs.py|scripts/bootstrap-update.sh|scripts/build-rust-helper.sh|\
+    VERSION|build.sh|install.sh|scripts/ubs.py|scripts/ubs_mcp.py|scripts/bootstrap-update.sh|scripts/build-rust-helper.sh|\
     native/ubs-helper/Cargo.toml|native/ubs-helper/Cargo.lock|native/ubs-helper/src/main.rs|\
     scripts/FLUTTER_VERSION|scripts/TAURI_VERSION|\
     scripts/build-flutter.sh|scripts/build-tauri.sh|scripts/build-tauri-macos.sh|scripts/build-gradle.sh|\
@@ -26,6 +26,7 @@ VERSION
 build.sh
 install.sh
 scripts/ubs.py
+scripts/ubs_mcp.py
 scripts/bootstrap-update.sh
 scripts/build-rust-helper.sh
 native/ubs-helper/Cargo.toml
@@ -419,7 +420,10 @@ ubs_run_update() {
       rm -rf "$temp_dir"
       return 1
     fi
-    case "$relative" in *.sh) mode=755 ;; *) mode=644 ;; esac
+    case "$relative" in
+      *.sh|scripts/ubs.py|scripts/ubs_mcp.py) mode=755 ;;
+      *) mode=644 ;;
+    esac
     if ! chmod "$mode" "$install_tmp"; then
       echo "권한 설정 실패: $relative — 적용된 파일을 복원합니다." >&2
       rm -f "$install_tmp"

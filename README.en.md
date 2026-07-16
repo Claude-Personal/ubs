@@ -4,7 +4,7 @@
 
 [한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
-**One `./build.sh` entry point for Flutter, Tauri, Android/Kotlin/Gradle, React, Next.js, and Node — shared by humans, CI, AI agents, and MCP wrappers.**
+**One `./build.sh` entry point for Flutter, Tauri, Xcode iOS, Android/Kotlin/Gradle, React, Next.js, and Node — shared by humans, CI, AI agents, and MCP.**
 
 [Quick start](#quick-start) · [Architecture](#architecture-and-flow) · [Commands](#commands) · [Security](#safe-runtime-updates) · [Troubleshooting](#troubleshooting)
 
@@ -14,13 +14,13 @@
 
 Universal Build Script decides whether the current directory is one project or a monorepo, detects buildable projects, removes nested duplicates, and dispatches each project to an ecosystem adapter.
 
-In 3.2, `build.sh` remains thin while Python owns workspace-aware Node/Gradle execution, dependency caching, conflict grouping, and resolved plans. The installer stages and SHA-256 verifies the complete release before one atomic transaction. Bash remains for Flutter/Tauri platform work, and the optional Rust helper batch-verifies updates.
+In 3.3, Python infers Node workspace, Flutter path, Gradle composite, and explicit project dependencies, then schedules topological layers. It also owns the Xcode-only iOS adapter. A dependency-free local stdio MCP server provides root-scoped read-only tools by default.
 
 | Concern | Default behavior |
 |---|---|
 | Interaction | Non-interactive and CI-safe |
 | Version | Unchanged unless a bump is explicitly requested |
-| Monorepo | Build detected projects sequentially in path order |
+| Monorepo | Build detected projects in topological dependency order |
 | Flutter | macOS: AAB + IPA; other hosts: AAB |
 | Tauri | Native OS bundle; signed `.pkg` when macOS signing is complete |
 | Failure | Continue independent projects, then return an aggregate failure |
@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 ./scripts/build-rust-helper.sh
 ```
 
-> **Upgrading from 2.x to 3.x:** run the installer once with `UBS_FORCE=true`. The 2.x updater intentionally rejects newly introduced Python/Rust paths. After 3.x is installed, `./build.sh update` manages the complete 24-file runtime bundle.
+> **Upgrading from 2.x to 3.x:** run the installer once with `UBS_FORCE=true`. After 3.x is installed, `./build.sh update` manages the complete 25-file runtime bundle.
 
 The transactional installer defaults to the immutable current release ref. `UBS_INSTALL_REF` selects another immutable ref. Key controls are `UBS_JOBS`, `UBS_INSTALL_MODE`, `UBS_MANAGE_GITIGNORE`, `UBS_GRADLE_FLAGS`, and `UBS_GRADLE_OPTIMIZE`.
 
@@ -53,6 +53,7 @@ Inspect first, then build:
 ./build.sh detect
 ./build.sh audit
 ./build.sh plan --json
+./build.sh graph --json
 ./build.sh
 ```
 
@@ -71,16 +72,18 @@ Build selected outputs and write a machine-readable result:
 flowchart TD
     U["Human / CI / AI / MCP"] --> B["build.sh compatibility entry point"]
     B --> D["Detect and deduplicate projects"]
-    D --> P["Validate options and create plan"]
+    D --> P["Infer dependencies and create topological plan"]
     P --> A{"Adapter"}
     A -->|"Tauri"| T["OS bundle / signed macOS package"]
     A -->|"Flutter"| F["AAB / APK / IPA / Web"]
     A -->|"Gradle"| G["Android / Kotlin / KMP tasks"]
     A -->|"Node"| N["React / Next / Node build script"]
+    A -->|"Xcode"| X["Release archive / optional IPA export"]
     T --> R["Exit status + artifact report"]
     F --> R
     G --> R
     N --> R
+    X --> R
 ```
 
 ### Detection precedence
@@ -91,14 +94,16 @@ flowchart LR
     T -->|"yes"| TA["Register Tauri; suppress nested frontend"]
     T -->|"no"| F{"Flutter pubspec?"}
     F -->|"yes"| FL["Register Flutter; suppress platform folders"]
-    F -->|"no"| G{"Gradle settings?"}
+    F -->|"no"| X{"Xcode workspace/project?"}
+    X -->|"yes"| XI["Classify Xcode-only iOS"]
+    X -->|"no"| G{"Gradle settings?"}
     G -->|"yes"| GR["Classify Android / KMP / Kotlin / Gradle"]
     G -->|"no"| N{"package.json with scripts.build?"}
     N -->|"yes"| NO["Classify Next / React / Node"]
     N -->|"no"| S["Scan child directories"]
 ```
 
-Precedence is **Tauri → Flutter → Gradle → Node**. This prevents a Tauri frontend from also appearing as React and Flutter platform folders from appearing as separate Gradle projects.
+Precedence is **Tauri → Flutter → Xcode → Gradle → Node**. This prevents nested Tauri and Flutter platform projects from being duplicated.
 
 ### Build and report contract
 
@@ -166,6 +171,7 @@ stateDiagram-v2
 |---|---|---|---|
 | Tauri 2 | `src-tauri/tauri.conf.json` | package manager `tauri build` | native OS bundle; optional macOS `.pkg` |
 | Flutter | Flutter SDK in `pubspec.yaml` | selected release outputs | AAB, split APK, IPA, Web, symbols |
+| Xcode iOS | root `*.xcworkspace` or `*.xcodeproj` | Release archive; optional export | XCArchive, IPA |
 | Android | Android Gradle plugin | app `bundleRelease`; otherwise `build` | project-defined Gradle outputs |
 | Kotlin Multiplatform | KMP Gradle plugin | `build` | target-specific outputs |
 | Kotlin/JVM or Gradle | Gradle configuration | `build` | JAR or project-defined outputs |
@@ -180,6 +186,7 @@ Generated and dependency directories such as `.git`, `node_modules`, `build`, `d
 ./build.sh detect --json /workspace
 ./build.sh audit --json /workspace
 ./build.sh plan --json /workspace
+./build.sh graph --json /workspace
 
 # Build one project or filtered monorepo projects
 ./build.sh build --project apps/mobile
@@ -202,7 +209,7 @@ Important options:
 | `--version-bump none|build|patch|minor|major` | App version policy |
 | `--flutter-outputs auto|LIST` | `appbundle`, `apk`, `ipa`, and/or `web` |
 | `--flutter-platform auto|all|ios|android` | Legacy platform selection when outputs are `auto` |
-| `--project PATH` | Build exactly one detected project |
+| `--project PATH` | Build one target plus its detected prerequisite projects |
 | `--all --type TYPE` | Filter monorepo projects |
 | `--clean` / `--skip-clean` | Flutter cache policy |
 | `--report-json PATH` | Write per-project status and discovered artifacts |
@@ -247,6 +254,16 @@ flowchart TD
 ```
 
 Package manager selection uses `packageManager`, then lock files for pnpm, Yarn, Bun, and finally npm. Frozen/immutable installation is used where supported.
+
+## Dependency graph and Xcode iOS
+
+`./build.sh graph --json` returns `nodes`, dependency `edges`, and topological `layers`. Builds use the same layers: independent projects in one layer may run under `--jobs N`, while a failed layer blocks its dependents. UBS infers Node workspace package references, Flutter `path:` dependencies, and Gradle `includeBuild(...)`. Add relationships that cannot be inferred in `ubs.dependencies.json`:
+
+```json
+{"schema_version":1,"dependencies":{"apps/web":["packages/ui"]}}
+```
+
+Paths must remain inside the workspace; cycles are rejected. Native roots containing `*.xcworkspace` or `*.xcodeproj` are detected as `ios-xcode`. On macOS, UBS archives a shared scheme in Release mode. Set `UBS_XCODE_SCHEME` when multiple schemes are ambiguous, and set `UBS_XCODE_EXPORT=true` plus `UBS_XCODE_EXPORT_OPTIONS` to export an IPA.
 
 ## Safe runtime updates
 
@@ -318,7 +335,7 @@ The repository includes [`skills/universal-build`](skills/universal-build/SKILL.
 detect --json → audit --json → plan --json → explicit user approval → build --report-json
 ```
 
-An MCP wrapper should expose narrow typed tools for detect, audit, plan, and build. Restrict workspace roots and enum options, preserve stdout/stderr and exit codes, set timeouts, and never accept arbitrary shell fragments or signing secrets.
+Run the bundled dependency-free stdio server with `python3 /ABSOLUTE/PATH/scripts/ubs_mcp.py` and set `UBS_MCP_ROOT` to the allowed workspace. It exposes `ubs_detect`, `ubs_audit`, `ubs_plan`, `ubs_graph`, and `ubs_update_check`. `ubs_build` is hidden unless `UBS_MCP_ALLOW_BUILD=true`; a real build also requires `confirm=true`. Paths outside the configured root and arbitrary shell fragments are rejected.
 
 ## Optimization audit boundaries
 
@@ -329,6 +346,7 @@ An MCP wrapper should expose narrow typed tools for detect, audit, plan, and bui
 ```bash
 bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 python tests/test_python_core.py
+python tests/test_mcp.py
 bash tests/test-detection.sh
 bash tests/test-install.sh
 bash tests/test-python-adapters.sh
@@ -350,8 +368,9 @@ Tests use temporary fixtures and mocked ecosystem commands. Real SDK builds, App
 
 ## Known limitations
 
-- Builds are sequential by default. `--jobs N` runs non-overlapping groups concurrently while ancestor/descendant paths and a shared Node workspace stay serialized; a complete ecosystem dependency DAG is not inferred.
-- Xcode-only native iOS projects are not detected.
+- Builds are sequential by default. `--jobs N` runs non-overlapping projects within each topological layer; shared Node workspaces and overlapping paths stay serialized.
+- Automatic dependency inference covers Node package names, Flutter paths, and Gradle composites. Generated-code or custom-task relationships need `ubs.dependencies.json`.
+- Ambiguous Xcode schemes require `UBS_XCODE_SCHEME`.
 - Gradle flavors, custom release tasks, and KMP deployment tasks may require overrides.
 - Tauri JS obfuscation assumes a `dist/` frontend output.
 - Artifact reporting searches known default output locations.

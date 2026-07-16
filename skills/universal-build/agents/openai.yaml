@@ -1,4 +1,4 @@
 interface:
   display_name: "Universal Build"
-  short_description: "Detect, audit, update, and run release builds"
+  short_description: "Detect, graph, audit, update, and run release builds"
   default_prompt: "Use $universal-build to inspect, update, and safely build this workspace."

@@ -1,11 +1,11 @@
 ---
 name: universal-build
-description: Detect, audit, plan, update, and run release builds across Flutter, Tauri, Android, Kotlin, Gradle, React, Next.js, and Node workspaces that contain the Universal Build Script. Use when an AI agent must inspect buildable projects, assess optimization or obfuscation coverage, select release outputs, check or apply managed runtime updates, dry-run a monorepo build, or execute ./build.sh safely.
+description: Detect, graph, audit, plan, update, and run release builds across Flutter, Tauri, Xcode iOS, Android, Kotlin, Gradle, React, Next.js, and Node workspaces that contain the Universal Build Script. Use when an AI agent must inspect buildable projects and dependencies, assess optimization or obfuscation coverage, select release outputs, check or apply managed runtime updates, dry-run a monorepo build, or execute ./build.sh safely.
 ---
 
 # Universal Build
 
-Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns workspace-aware Node/Gradle execution, resolved plans, and conflict-group scheduling while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
+Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns dependency graphs, topological scheduling, workspace-aware Node/Gradle execution, Xcode builds, and resolved plans while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
 
 ## Locate the Build Root
 
@@ -19,6 +19,7 @@ Find the nearest workspace directory containing `build.sh`. If `scripts/ubs.py` 
    ./build.sh detect --json .
    ./build.sh audit --json .
    ./build.sh plan --json .
+   ./build.sh graph --json .
    ```
 
 2. Summarize detected projects, planned adapters, requested artifacts, and audit gaps. Read [references/optimization.md](references/optimization.md) before interpreting optimization or obfuscation results.
@@ -60,11 +61,12 @@ Use environment overrides for non-Flutter adapters only when the project require
 UBS_GRADLE_TASK=assembleRelease ./build.sh .
 UBS_NODE_BUILD_SCRIPT=build:production ./build.sh .
 UBS_TAURI_PACKAGE_MODE=signed ./build.sh .
+UBS_XCODE_SCHEME=MyApp UBS_XCODE_EXPORT=true ./build.sh .
 ```
 
-Prefer `--project PATH` for one detected project and `--all --type TYPE` for filtered monorepo builds. Use `--fail-fast` only when later independent projects should not continue after a failure.
+Prefer `--project PATH` for one target (its detected prerequisites are included) and `--all --type TYPE` for filtered monorepo builds. Use `--fail-fast` only when later independent projects should not continue after a failure.
 
-`--jobs N` automatically serializes ancestor/descendant paths and projects sharing a Node workspace. Keep the default of one worker when separate workspaces share signing state or implicit external outputs. Node dependency installation is cached from workspace locks, configuration, patches, manager/runtime versions, and package manifests; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
+`--jobs N` runs only independent projects in the same topological layer and automatically serializes ancestor/descendant paths and projects sharing a Node workspace. Review `graph --json`; record dependencies outside Node package names, Flutter paths, and Gradle composites in `ubs.dependencies.json`. Keep the default of one worker when separate workspaces share signing state or implicit external outputs. Node dependency installation is cached from workspace locks, configuration, patches, manager/runtime versions, and package manifests; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
 
 The installer stages and verifies the full immutable release before applying one transaction. Use `UBS_INSTALL_REF` only for an immutable reviewed tag or commit, never an arbitrary moving branch.
 
@@ -81,11 +83,4 @@ Verify actual artifacts and logs after a real build. For high-assurance release 
 
 ## MCP Integration Contract
 
-Expose the existing commands through a thin MCP server instead of duplicating logic:
-
-- `detect_projects(root)` → `./build.sh detect --json ROOT`
-- `audit_build(root)` → `./build.sh audit --json ROOT`
-- `plan_build(root, options)` → `./build.sh plan --json ... ROOT`
-- `run_build(root, options)` → `./build.sh --report-json REPORT ... ROOT`
-
-Keep `run_build` visibly mutating and require explicit user intent. Validate option values, restrict `root` to allowed workspaces, stream stderr separately, return process exit codes, and apply execution timeouts. Do not expose arbitrary shell fragments as MCP arguments.
+Prefer the bundled `scripts/ubs_mcp.py` stdio server. Set `UBS_MCP_ROOT` to the allowed workspace. Its default tools are `ubs_detect`, `ubs_audit`, `ubs_plan`, `ubs_graph`, and `ubs_update_check`. It hides `ubs_build` unless the server starts with `UBS_MCP_ALLOW_BUILD=true`, and non-dry-run builds require `confirm=true`. Do not replace these controls with an arbitrary shell tool or pass signing secrets through free-form arguments.

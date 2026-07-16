@@ -10,6 +10,7 @@ Use this matrix when explaining `./build.sh audit` results.
 | Tauri frontend | Framework production build when recognized | Optional lockfile-installed JS obfuscator only when configured | Keep `javascript-obfuscator` pinned locally; JS obfuscation can increase size or break runtime behavior |
 | Android | R8/minify and resource shrinking when configured in release build type | R8 renaming when minify and rules are configured | Keep mapping files and test reflection/serialization |
 | Kotlin/JVM/KMP/Gradle | Project-specific Gradle release tasks | Not automatic | Inspect each target and packaging plugin |
+| Xcode iOS | Release archive; project optimization and strip settings are reported | Native compilation does not guarantee obfuscation | Preserve dSYM files and verify signing/export policy |
 | React/Next/Node | Framework production minification/tree shaking when recognized | Not automatic | Minification and obfuscation are different guarantees |
 
 ## Status meanings

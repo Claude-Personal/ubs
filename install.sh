@@ -25,7 +25,7 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 REPOSITORY = "https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
@@ -35,7 +35,7 @@ MANAGE_GITIGNORE = os.environ.get("UBS_MANAGE_GITIGNORE", "true") == "true"
 ROOT = Path.cwd().resolve()
 
 MANAGED = (
-    "VERSION", "build.sh", "install.sh", "scripts/ubs.py",
+    "VERSION", "build.sh", "install.sh", "scripts/ubs.py", "scripts/ubs_mcp.py",
     "scripts/bootstrap-update.sh", "scripts/build-rust-helper.sh",
     "native/ubs-helper/Cargo.toml", "native/ubs-helper/Cargo.lock",
     "native/ubs-helper/src/main.rs", "scripts/FLUTTER_VERSION",
@@ -231,7 +231,9 @@ def main() -> None:
         if destination.is_file() and not FORCE:
             print(f"preserved: {relative} (set UBS_FORCE=true to replace)")
             continue
-        mode = 0o755 if relative.endswith(".sh") or relative == "scripts/ubs.py" else 0o644
+        mode = 0o755 if relative.endswith(".sh") or relative in {
+            "scripts/ubs.py", "scripts/ubs_mcp.py",
+        } else 0o644
         add_change(changes, relative, staged[relative], mode)
 
     if MANAGE_GITIGNORE:

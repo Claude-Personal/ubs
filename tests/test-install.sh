@@ -23,7 +23,7 @@ sha256_file() {
 
 run_installer "$FIXTURE/target" >/dev/null
 
-# Manifest 24개와 설치 목록이 완전히 일치해야 한다.
+# Manifest 25개와 설치 목록이 완전히 일치해야 한다.
 while IFS=' ' read -r kind hash relative extra; do
   [ "$kind" = file ] || continue
   [ -f "$FIXTURE/target/$relative" ] || {
@@ -31,7 +31,10 @@ while IFS=' ' read -r kind hash relative extra; do
     exit 1
   }
 done < "$ROOT/scripts/update-manifest.txt"
-[ "$(awk '$1 == "file" { count++ } END { print count + 0 }' "$ROOT/scripts/update-manifest.txt")" -eq 24 ]
+[ "$(awk '$1 == "file" { count++ } END { print count + 0 }' "$ROOT/scripts/update-manifest.txt")" -eq 25 ]
+[ -x "$FIXTURE/target/build.sh" ]
+[ -x "$FIXTURE/target/scripts/ubs.py" ]
+[ -x "$FIXTURE/target/scripts/ubs_mcp.py" ]
 
 grep -Fq '# BEGIN Universal Build Script' "$FIXTURE/target/.gitignore" || {
   echo "설치기가 개인정보 보호 ignore 블록을 추가하지 않았습니다." >&2

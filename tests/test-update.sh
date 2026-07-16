@@ -107,11 +107,15 @@ cmp "$TARGET/scripts/lib/detect.sh" "$REMOTE/scripts/lib/detect.sh" || {
 }
 
 # Python 코어가 사라져도 얇은 Bash bootstrap이 update를 실행해 복구해야 한다.
-rm -f "$TARGET/scripts/ubs.py"
+rm -f "$TARGET/scripts/ubs.py" "$TARGET/scripts/ubs_mcp.py"
 CORE_MISSING_CHECK="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check)"
 printf '%s\n' "$CORE_MISSING_CHECK" | grep -Fq 'scripts/ubs.py' || {
   echo "bootstrap update가 누락된 Python 코어를 찾지 못했습니다." >&2
+  exit 1
+}
+printf '%s\n' "$CORE_MISSING_CHECK" | grep -Fq 'scripts/ubs_mcp.py' || {
+  echo "bootstrap update가 누락된 MCP 서버를 찾지 못했습니다." >&2
   exit 1
 }
 CORE_MISSING_JSON="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
@@ -121,6 +125,7 @@ import json, sys
 result = json.load(sys.stdin)
 assert result["schema_version"] == 1
 assert "scripts/ubs.py" in result["changed_paths"]
+assert "scripts/ubs_mcp.py" in result["changed_paths"]
 '
 UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update >/dev/null
@@ -128,6 +133,9 @@ cmp "$TARGET/scripts/ubs.py" "$REMOTE/scripts/ubs.py" || {
   echo "bootstrap update가 Python 코어를 복구하지 못했습니다." >&2
   exit 1
 }
+cmp "$TARGET/scripts/ubs_mcp.py" "$REMOTE/scripts/ubs_mcp.py"
+[ -x "$TARGET/scripts/ubs.py" ]
+[ -x "$TARGET/scripts/ubs_mcp.py" ]
 
 UPDATE_JSON="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check --json)"
@@ -138,8 +146,8 @@ assert result["schema_version"] == 1
 assert result["ok"] is True
 assert result["mode"] == "check"
 assert result["status"] == 0
-assert result["local_version"] == "3.2.0"
-assert result["remote_version"] == "3.2.0"
+assert result["local_version"] == "3.3.0"
+assert result["remote_version"] == "3.3.0"
 assert result["changed_paths"] == []
 assert result["backup_path"] is None
 assert isinstance(result["output"], list)
@@ -188,7 +196,7 @@ fi
 }
 
 # 원격 버전이 더 낮으면 명시적 허용 없이 적용하지 않아야 한다.
-sed 's/^version 3\.2\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
+sed 's/^version 3\.3\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
   > "$REMOTE/scripts/update-manifest.txt"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
