@@ -105,6 +105,54 @@ class PythonCoreTests(unittest.TestCase):
             self.assertEqual(status, 0)
             opener.assert_called_once_with([ubs.Project("node", root)])
 
+    def _mock_tty(self, is_tty: bool) -> mock.Mock:
+        mock_sys = mock.Mock(wraps=ubs.sys)
+        mock_sys.stdin.isatty.return_value = is_tty
+        mock_sys.stdout.isatty.return_value = is_tty
+        return mock_sys
+
+    def test_local_default_prompt_persists_choice_and_skips_next_time(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with mock.patch.object(ubs, "sys", self._mock_tty(True)), \
+                    mock.patch("builtins.input", return_value="2"):
+                self.assertFalse(ubs.resolve_non_interactive_default(root))
+            config = json.loads((root / ".ubs" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["non_interactive_default"], False)
+            with mock.patch("builtins.input", side_effect=AssertionError("should not prompt twice")):
+                self.assertFalse(ubs.resolve_non_interactive_default(root))
+
+    def test_local_default_prompt_skips_without_a_real_tty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with mock.patch.object(ubs, "sys", self._mock_tty(False)), \
+                    mock.patch("builtins.input", side_effect=AssertionError("must not prompt without a tty")):
+                self.assertTrue(ubs.resolve_non_interactive_default(root))
+                self.assertFalse(ubs.resolve_obfuscate_default(root))
+            self.assertFalse((root / ".ubs" / "config.json").exists())
+
+    def test_obfuscate_default_prompt_persists_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with mock.patch.object(ubs, "sys", self._mock_tty(True)), \
+                    mock.patch("builtins.input", return_value="2"):
+                self.assertTrue(ubs.resolve_obfuscate_default(root))
+            config = json.loads((root / ".ubs" / "config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["obfuscate_js_default"], True)
+
+    def test_obfuscate_prompt_only_triggers_for_tauri_projects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "package.json").write_text(
+                '{"name":"solo","scripts":{"build":"true"}}', encoding="utf-8",
+            )
+            ubs.load_package.cache_clear()
+            with mock.patch.object(ubs, "run_project", return_value=0), \
+                    mock.patch.object(ubs, "open_artifact_directories"), \
+                    mock.patch.object(ubs, "resolve_obfuscate_default") as obfuscate:
+                ubs.main(["build", "--non-interactive", str(root)])
+            obfuscate.assert_not_called()
+
     def test_windows_gradle_arguments_preserve_backslashes(self) -> None:
         value = r'-PstoreFile=C:\Users\me\release.jks "-Pcache=C:\build cache"'
         self.assertEqual(

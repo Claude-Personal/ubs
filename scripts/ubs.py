@@ -115,7 +115,7 @@ USAGE = """Universal Build Script
   --flutter-platform auto|all|ios|android
   --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
-  --obfuscate-js                      Tauri 프런트엔드 JS 난독화 (기본 꺼짐)
+  --obfuscate-js | --no-obfuscate-js  Tauri 프런트엔드 JS 난독화 (첫 Tauri 빌드에서 기본값을 물어봄)
   --fail-fast
   --jobs N                            독립 프로젝트 제한 병렬 빌드
   --report-json <파일>               실제 빌드 결과 JSON 저장
@@ -147,6 +147,7 @@ class Options:
     flutter_platform: str = os.environ.get("UBS_FLUTTER_PLATFORM", "auto")
     flutter_outputs: str = os.environ.get("UBS_FLUTTER_OUTPUTS", "auto")
     obfuscate_js: bool = os.environ.get("TAURI_OBFUSCATE_JS", "false") == "true"
+    obfuscate_js_explicit: bool = "TAURI_OBFUSCATE_JS" in os.environ
     type_filter: str = ""
     project_path: Optional[Path] = None
     report_json: Optional[Path] = None
@@ -1089,7 +1090,8 @@ def parse_options(argv: Sequence[str]) -> Options:
         elif value == "--interactive": options.non_interactive = False; options.non_interactive_explicit = True
         elif value == "--skip-clean": options.skip_clean = True
         elif value == "--clean": options.skip_clean = False
-        elif value == "--obfuscate-js": options.obfuscate_js = True
+        elif value == "--obfuscate-js": options.obfuscate_js = True; options.obfuscate_js_explicit = True
+        elif value == "--no-obfuscate-js": options.obfuscate_js = False; options.obfuscate_js_explicit = True
         elif value == "--fail-fast": options.fail_fast = True
         elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs"}:
             index += 1
@@ -1579,28 +1581,62 @@ def load_local_config(root: Path) -> dict:
         return {}
 
 
-def resolve_non_interactive_default(root: Path) -> bool:
-    """First real-terminal build asks once whether to default to unattended
-    or interactive builds, then remembers the choice in .ubs/config.json."""
-    config = load_local_config(root)
-    if "non_interactive_default" in config:
-        return bool(config["non_interactive_default"])
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return True
-    print(f"{CYAN}처음 빌드네요 — 앞으로 기본 동작을 선택해주세요.{NC}")
-    print(f"  {YELLOW}1) 무인 빌드{NC} (기본값 자동 적용, 매번 묻지 않음)")
-    print(f"  {YELLOW}2) 대화형 빌드{NC} (버전·플랫폼을 매번 직접 선택)")
-    try:
-        non_interactive = input("선택 (1-2) [1]: ").strip() != "2"
-    except (EOFError, KeyboardInterrupt):
-        print(f"\n{YELLOW}입력을 받지 못해 이번만 무인 빌드로 진행합니다 (다음 실행에서 다시 물어봅니다).{NC}")
-        return True
-    config["non_interactive_default"] = non_interactive
+def save_local_config(root: Path, config: dict) -> None:
     path = local_config_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"{CYAN}ℹ️  {path}에 저장했습니다. 매 실행마다 --interactive 또는 --non-interactive로 재정의할 수 있습니다.{NC}")
-    return non_interactive
+
+
+def ask_and_remember_default(
+    root: Path, config_key: str, non_tty_default: bool, header: str,
+    option_1: str, option_2: str, override_hint: str, invert: bool = False,
+) -> bool:
+    """Ask a yes/no-shaped question once at a real terminal and remember the
+    answer in .ubs/config.json. Option 2 means True, unless invert=True makes
+    option 2 mean False (used when option 1 is the "positive" choice)."""
+    config = load_local_config(root)
+    if config_key in config:
+        return bool(config[config_key])
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return non_tty_default
+    print(header)
+    print(f"  {YELLOW}1) {option_1}{NC}")
+    print(f"  {YELLOW}2) {option_2}{NC}")
+    try:
+        chose_second = input("선택 (1-2) [1]: ").strip() == "2"
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{YELLOW}입력을 받지 못해 이번만 기본값으로 진행합니다 (다음 실행에서 다시 물어봅니다).{NC}")
+        return non_tty_default
+    value = (not chose_second) if invert else chose_second
+    config[config_key] = value
+    save_local_config(root, config)
+    print(f"{CYAN}ℹ️  {local_config_path(root)}에 저장했습니다. {override_hint}{NC}")
+    return value
+
+
+def resolve_non_interactive_default(root: Path) -> bool:
+    """First real-terminal build asks once whether to default to unattended
+    or interactive builds, then remembers the choice in .ubs/config.json."""
+    return ask_and_remember_default(
+        root, "non_interactive_default", non_tty_default=True,
+        header=f"{CYAN}처음 빌드네요 — 앞으로 기본 동작을 선택해주세요.{NC}",
+        option_1="무인 빌드 (기본값 자동 적용, 매번 묻지 않음)",
+        option_2="대화형 빌드 (버전·플랫폼을 매번 직접 선택)",
+        override_hint="매 실행마다 --interactive 또는 --non-interactive로 재정의할 수 있습니다.",
+        invert=True,
+    )
+
+
+def resolve_obfuscate_default(root: Path) -> bool:
+    """First Tauri build at a real terminal asks once whether frontend JS
+    obfuscation should default on, then remembers the choice."""
+    return ask_and_remember_default(
+        root, "obfuscate_js_default", non_tty_default=False,
+        header=f"{CYAN}Tauri 프런트엔드 JS 난독화를 기본으로 켤까요?{NC}",
+        option_1="끄기 (기본값, 배포 전 필요할 때만 켜기)",
+        option_2="켜기 (매번 자동으로 난독화 적용)",
+        override_hint="매 실행마다 --obfuscate-js 또는 --no-obfuscate-js로 재정의할 수 있습니다.",
+    )
 
 
 def main(argv: Sequence[str]) -> int:
@@ -1679,6 +1715,8 @@ def main(argv: Sequence[str]) -> int:
             return 1
         if not options.project_path and not detect_project_type(root):
             print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
+        if not options.obfuscate_js_explicit and any(project.type == "tauri" for project in projects):
+            options.obfuscate_js = resolve_obfuscate_default(root)
         if len(projects) == 1 and not options.build_all and options.jobs == 1:
             status = run_project(projects[0], options, report)
             if status == 0 and not options.dry_run:
