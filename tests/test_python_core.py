@@ -92,6 +92,14 @@ class PythonCoreTests(unittest.TestCase):
         self.assertFalse(ubs.should_open_output({"UBS_OPEN_OUTPUT": "auto"}, interactive=False))
         self.assertTrue(ubs.should_open_output({"UBS_OPEN_OUTPUT": "true"}, interactive=False))
 
+    def test_terminal_hyperlink_wraps_path_as_clickable_osc8(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / "my folder"
+            link = ubs.terminal_hyperlink(path)
+            self.assertTrue(link.startswith(f"\033]8;;{path.as_uri()}\033\\"))
+            self.assertIn(str(path), link)
+            self.assertTrue(link.endswith("\033]8;;\033\\"))
+
     def test_single_project_fast_path_still_opens_output_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
