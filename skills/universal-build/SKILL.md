@@ -41,6 +41,8 @@ Do not silently add signing, notarization, or deployment. A signed Tauri package
 
 Tauri frontend JS obfuscation defaults off. On the first Tauri build in a project, `build.sh` asks a human at a real terminal whether to default obfuscation on and remembers the answer alongside the interactive-vs-unattended choice in `.ubs/config.json`. Agent/MCP/CI runs are never prompted; pass `--obfuscate-js` or `--no-obfuscate-js` explicitly only when the user asked for a specific behavior regardless of the saved default, since obfuscation can increase bundle size or break runtime behavior.
 
+Tauri macOS builds default to a universal binary (Apple Silicon + Intel, one `.app` via `--target universal-apple-darwin`) when `rustup` is available; set `TAURI_UNIVERSAL_MACOS=false` for a faster host-arch-only build. The artifact then lives under `src-tauri/target/universal-apple-darwin/release/bundle/...` instead of `src-tauri/target/release/bundle/...` — read the printed `Artifact` path rather than assuming the default location.
+
 ## Update the Managed Runtime
 
 Keep updates separate from builds. Never update merely because the user requested a build. When the user asks to update Universal Build, inspect first:

@@ -895,11 +895,28 @@ DIRECTORY_PATTERNS = {
     "build/ubs/*.xcarchive",
 }
 
+# macOS Tauri builds targeting a specific Rust triple (notably
+# universal-apple-darwin, for an Intel+Apple Silicon lipo'd .app) land under
+# target/<triple>/release instead of target/release. These are scanned in
+# addition to ARTIFACT_PATTERNS["tauri"] so discover_artifacts() still finds
+# them, but are deliberately kept out of ARTIFACT_PATTERNS itself: feeding
+# them into preferred_output_roots()'s prefix grouping would collapse the
+# common ancestor down to the noisy top-level target/ directory (shared with
+# target/release/bundle) instead of the specific bundle folder.
+TAURI_TARGET_TRIPLES = ("universal-apple-darwin", "aarch64-apple-darwin", "x86_64-apple-darwin")
+TAURI_TARGET_BUNDLE_PATTERNS = [
+    f"src-tauri/target/{triple}/release/bundle/*/*" for triple in TAURI_TARGET_TRIPLES
+]
+DIRECTORY_PATTERNS.update(TAURI_TARGET_BUNDLE_PATTERNS)
+
 
 @lru_cache(maxsize=None)
 def discover_artifacts(project: Project) -> List[str]:
     found = set()
-    for pattern in ARTIFACT_PATTERNS.get(project.type, []):
+    patterns = ARTIFACT_PATTERNS.get(project.type, [])
+    if project.type == "tauri":
+        patterns = [*patterns, *TAURI_TARGET_BUNDLE_PATTERNS]
+    for pattern in patterns:
         for value in glob.glob(str(project.path / pattern), recursive=True):
             path = Path(value)
             if path.is_file() or (path.is_dir() and pattern in DIRECTORY_PATTERNS):

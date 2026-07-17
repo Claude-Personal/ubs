@@ -333,6 +333,7 @@ printf '%s\n' \
   > "$FIXTURE/apps/desktop/.env.macos"
 if PATH="$FIXTURE/bin:$PATH" \
   UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
+  TAURI_UNIVERSAL_MACOS=false \
   bash -c 'cd "$1" && bash "$2"' _ \
   "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh" >/dev/null 2>&1; then
   echo "서명 파일이 없는 Tauri 테스트가 성공했습니다." >&2
@@ -350,7 +351,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 chmod +x "$FIXTURE/bin/npm"
 PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri.log" \
   UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
-  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true TAURI_UNIVERSAL_MACOS=false \
   bash -c 'cd "$1" && bash "$2"' _ \
   "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
 [ -d "$FIXTURE/apps/desktop/src-tauri/target/release/bundle/macos/Desktop.app" ] || {
@@ -383,7 +384,7 @@ printf '%s\n' '#!/usr/bin/env bash' \
 chmod +x "$FIXTURE/bin/xattr" "$FIXTURE/bin/codesign" "$FIXTURE/bin/productbuild"
 PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-signed.log" \
   UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
-  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true TAURI_UNIVERSAL_MACOS=false \
   bash -c 'cd "$1" && bash "$2"' _ \
   "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
 [ -f "$FIXTURE/apps/desktop/signing/build/Desktop.pkg" ] || {
@@ -392,6 +393,41 @@ PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-signed.log" \
 }
 grep -Fq 'xattr -cr signing/App.provisionprofile' "$FIXTURE/tauri-signed.log" || {
   echo "Tauri signed 모드에서 quarantine 속성 제거가 실행되지 않았습니다." >&2
+  exit 1
+}
+
+# macOS 유니버설 빌드(TAURI_UNIVERSAL_MACOS 기본 on)는 --target universal-apple-darwin으로
+# 빌드하고 target/<triple>/release 아래에서 산출물을 찾아야 한다.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'case "$1 $2" in' \
+  '  "target list") printf "aarch64-apple-darwin (installed)\nx86_64-apple-darwin (installed)\n" ;;' \
+  '  *) exit 0 ;;' \
+  'esac' \
+  > "$FIXTURE/bin/rustup"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "$1 $2" = "run tauri" ]; then' \
+  '  bundle_dir="src-tauri/target/release/bundle/macos"' \
+  '  prev=""' \
+  '  for value in "$@"; do' \
+  '    [ "$prev" != "--target" ] || bundle_dir="src-tauri/target/$value/release/bundle/macos"' \
+  '    prev="$value"' \
+  '  done' \
+  '  mkdir -p "$bundle_dir/Desktop.app/Contents"' \
+  'fi' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/rustup" "$FIXTURE/bin/npm"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-universal.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
+[ -d "$FIXTURE/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Desktop.app" ] || {
+  echo "macOS 유니버설 빌드가 target/<triple>/release 아래에 산출물을 만들지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- '--target universal-apple-darwin' "$FIXTURE/tauri-universal.log" || {
+  echo "macOS 유니버설 빌드가 tauri build에 --target을 전달하지 않았습니다." >&2
   exit 1
 }
 

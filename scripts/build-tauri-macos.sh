@@ -208,6 +208,25 @@ fi
 OBFUSCATE_JS="${TAURI_OBFUSCATE_JS:-false}"
 
 # ==========================================
+# macOS 유니버설 바이너리 (Apple Silicon + Intel)
+# ==========================================
+
+# tauri build --target universal-apple-darwin는 aarch64/x86_64 두 슬라이스를
+# lipo로 합친 .app 하나를 만든다 — 배포 산출물은 여전히 1개.
+TAURI_TARGET_ARGS=()
+if [ "$HOST_OS" = "Darwin" ] && [ "${TAURI_UNIVERSAL_MACOS:-true}" = "true" ]; then
+  if command -v rustup >/dev/null 2>&1; then
+    for triple in aarch64-apple-darwin x86_64-apple-darwin; do
+      rustup target list --installed 2>/dev/null | grep -qx "$triple" || rustup target add "$triple"
+    done
+    echo -e "${CYAN}🌐 macOS 유니버설 바이너리(Apple Silicon + Intel)로 빌드합니다. 끄려면: TAURI_UNIVERSAL_MACOS=false${NC}"
+    TAURI_TARGET_ARGS=(--target universal-apple-darwin)
+  else
+    echo -e "${YELLOW}⚠️  rustup이 없어 유니버설 빌드를 건너뜁니다. 현재 아키텍처로만 빌드합니다.${NC}"
+  fi
+fi
+
+# ==========================================
 # 빌드 시작
 # ==========================================
 
@@ -246,15 +265,17 @@ if [ "$OBFUSCATE_JS" = "true" ]; then
   fi
 
   echo -e "${BLUE}🚀 [3/4] tauri build (프런트엔드 재빌드 스킵)...${NC}"
-  run_node_script tauri build -- --config '{"build":{"beforeBuildCommand":""}}' "$@"
+  run_node_script tauri build -- --config '{"build":{"beforeBuildCommand":""}}' "${TAURI_TARGET_ARGS[@]}" "$@"
 else
   echo -e "${BLUE}🚀 [1/3] tauri build...${NC}"
-  run_node_script tauri build -- "$@"
+  run_node_script tauri build -- "${TAURI_TARGET_ARGS[@]}" "$@"
   echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: ./build.sh --obfuscate-js${NC}"
 fi
 
 if [ "$HOST_OS" = "Darwin" ]; then
-  BUNDLE_APP="src-tauri/target/release/bundle/macos/${APP_NAME}.app"
+  BUNDLE_TARGET_DIR="release"
+  [ ${#TAURI_TARGET_ARGS[@]} -eq 0 ] || BUNDLE_TARGET_DIR="${TAURI_TARGET_ARGS[1]}/release"
+  BUNDLE_APP="src-tauri/target/${BUNDLE_TARGET_DIR}/bundle/macos/${APP_NAME}.app"
   [ -d "$BUNDLE_APP" ] || { echo -e "${RED}❌ 빌드 결과 .app 을 찾을 수 없습니다: $BUNDLE_APP${NC}"; exit 1; }
   ARTIFACT_OUT="$BUNDLE_APP"
 else

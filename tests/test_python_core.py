@@ -88,6 +88,23 @@ class PythonCoreTests(unittest.TestCase):
                 [root / "src-tauri/target/release/bundle"],
             )
 
+    def test_universal_darwin_tauri_build_opens_its_specific_bundle_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            bundle = root / "src-tauri/target/universal-apple-darwin/release/bundle/macos"
+            bundle.mkdir(parents=True)
+            (bundle / "App.app").mkdir()
+            self.assertEqual(
+                ubs.discover_artifacts(ubs.Project("tauri", root)),
+                [str(bundle / "App.app")],
+            )
+            # Must NOT collapse to the shared "target" ancestor with the
+            # default (non-multi-target) bundle pattern's preferred root.
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("tauri", root)),
+                [bundle],
+            )
+
     def test_output_folder_opening_is_cross_platform_and_opt_in_safe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
