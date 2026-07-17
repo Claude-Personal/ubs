@@ -146,8 +146,8 @@ assert result["schema_version"] == 1
 assert result["ok"] is True
 assert result["mode"] == "check"
 assert result["status"] == 0
-assert result["local_version"] == "3.5.0"
-assert result["remote_version"] == "3.5.0"
+assert result["local_version"] == "3.5.1"
+assert result["remote_version"] == "3.5.1"
 assert result["changed_paths"] == []
 assert result["backup_path"] is None
 assert isinstance(result["output"], list)
@@ -196,7 +196,7 @@ fi
 }
 
 # 원격 버전이 더 낮으면 명시적 허용 없이 적용하지 않아야 한다.
-sed 's/^version 3\.5\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
+sed 's/^version 3\.5\.1$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
   > "$REMOTE/scripts/update-manifest.txt"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then

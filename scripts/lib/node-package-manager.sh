@@ -51,9 +51,33 @@ PY
   }
 }
 
+node_dependency_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'
+  else shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+node_dependency_digest() {
+  command -v node >/dev/null 2>&1 && node --version
+  command -v "$NODE_PM" >/dev/null 2>&1 && "$NODE_PM" --version
+  local file
+  for file in package.json package-lock.json pnpm-lock.yaml yarn.lock npm-shrinkwrap.json bun.lock bun.lockb .yarnrc.yml; do
+    [ -f "$file" ] && { printf '%s\n' "$file"; cat "$file"; }
+  done
+}
+
 install_node_dependencies() {
   (
   cd "$NODE_WORKSPACE_ROOT"
+  local stamp="node_modules/.ubs-install-sha256"
+  local digest=""
+  if [ "${UBS_INSTALL_MODE:-auto}" = "auto" ]; then
+    digest="$(node_dependency_digest | node_dependency_sha256)"
+    if [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$digest" ]; then
+      echo -e "${CYAN}ℹ️  의존성 입력이 변경되지 않아 $NODE_PM install을 생략합니다.${NC}"
+      return 0
+    fi
+  fi
   case "$NODE_PM" in
     pnpm)
       if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile
@@ -79,6 +103,11 @@ install_node_dependencies() {
       fi
       ;;
   esac
+  local status=$?
+  if [ $status -eq 0 ] && [ -d node_modules ]; then
+    node_dependency_digest | node_dependency_sha256 > "$stamp"
+  fi
+  return $status
   )
 }
 
