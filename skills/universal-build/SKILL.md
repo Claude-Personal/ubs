@@ -37,6 +37,8 @@ On its first build in a project, `build.sh` asks a human at a real terminal whet
 
 Do not silently add signing, publishing, notarization, upload, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
 
+Tauri frontend JS obfuscation is opt-in and off by default; pass `--obfuscate-js` (or set `TAURI_OBFUSCATE_JS=true`) only when the user explicitly asked for it, since it can increase bundle size or break runtime behavior.
+
 ## Update the Managed Runtime
 
 Keep updates separate from builds. Never update merely because the user requested a build. When the user asks to update Universal Build, inspect first:

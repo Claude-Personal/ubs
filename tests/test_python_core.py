@@ -92,6 +92,19 @@ class PythonCoreTests(unittest.TestCase):
         self.assertFalse(ubs.should_open_output({"UBS_OPEN_OUTPUT": "auto"}, interactive=False))
         self.assertTrue(ubs.should_open_output({"UBS_OPEN_OUTPUT": "true"}, interactive=False))
 
+    def test_single_project_fast_path_still_opens_output_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "package.json").write_text(
+                '{"name":"solo","scripts":{"build":"true"}}', encoding="utf-8",
+            )
+            ubs.load_package.cache_clear()
+            with mock.patch.object(ubs, "run_project", return_value=0), \
+                    mock.patch.object(ubs, "open_artifact_directories") as opener:
+                status = ubs.main(["build", "--non-interactive", str(root)])
+            self.assertEqual(status, 0)
+            opener.assert_called_once_with([ubs.Project("node", root)])
+
     def test_windows_gradle_arguments_preserve_backslashes(self) -> None:
         value = r'-PstoreFile=C:\Users\me\release.jks "-Pcache=C:\build cache"'
         self.assertEqual(

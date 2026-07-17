@@ -250,7 +250,7 @@ if [ "$OBFUSCATE_JS" = "true" ]; then
 else
   echo -e "${BLUE}🚀 [1/3] tauri build...${NC}"
   run_node_script tauri build -- "$@"
-  echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: TAURI_OBFUSCATE_JS=true ./build.sh${NC}"
+  echo -e "${CYAN}ℹ️  JS 난독화는 기본 꺼져있음 — 켜려면: ./build.sh --obfuscate-js${NC}"
 fi
 
 if [ "$HOST_OS" = "Darwin" ]; then

@@ -115,6 +115,7 @@ USAGE = """Universal Build Script
   --flutter-platform auto|all|ios|android
   --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
+  --obfuscate-js                      Tauri 프런트엔드 JS 난독화 (기본 꺼짐)
   --fail-fast
   --jobs N                            독립 프로젝트 제한 병렬 빌드
   --report-json <파일>               실제 빌드 결과 JSON 저장
@@ -145,6 +146,7 @@ class Options:
     version_bump: str = os.environ.get("UBS_VERSION_BUMP", "none")
     flutter_platform: str = os.environ.get("UBS_FLUTTER_PLATFORM", "auto")
     flutter_outputs: str = os.environ.get("UBS_FLUTTER_OUTPUTS", "auto")
+    obfuscate_js: bool = os.environ.get("TAURI_OBFUSCATE_JS", "false") == "true"
     type_filter: str = ""
     project_path: Optional[Path] = None
     report_json: Optional[Path] = None
@@ -1087,6 +1089,7 @@ def parse_options(argv: Sequence[str]) -> Options:
         elif value == "--interactive": options.non_interactive = False; options.non_interactive_explicit = True
         elif value == "--skip-clean": options.skip_clean = True
         elif value == "--clean": options.skip_clean = False
+        elif value == "--obfuscate-js": options.obfuscate_js = True
         elif value == "--fail-fast": options.fail_fast = True
         elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs"}:
             index += 1
@@ -1403,6 +1406,7 @@ def run_project(project: Project, options: Options, report: BuildReport) -> int:
         "UBS_FLUTTER_OUTPUTS": options.flutter_outputs,
         "UBS_SKIP_CLEAN": str(options.skip_clean).lower(),
         "UBS_RUNTIME_ROOT": str(RUNTIME_ROOT),
+        "TAURI_OBFUSCATE_JS": str(options.obfuscate_js).lower(),
     })
     if project.type in PYTHON_ADAPTER_TYPES:
         status = run_python_adapter(project.type, project.path, environment)
@@ -1676,7 +1680,10 @@ def main(argv: Sequence[str]) -> int:
         if not options.project_path and not detect_project_type(root):
             print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
         if len(projects) == 1 and not options.build_all and options.jobs == 1:
-            return run_project(projects[0], options, report)
+            status = run_project(projects[0], options, report)
+            if status == 0 and not options.dry_run:
+                open_artifact_directories(projects)
+            return status
         return execute_projects(projects, options, report, root)
     except (ValueError, OSError) as error:
         eprint(str(error))
