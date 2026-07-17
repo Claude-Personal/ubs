@@ -46,6 +46,21 @@ class PythonCoreTests(unittest.TestCase):
                 [root / "build"],
             )
 
+    def test_flutter_single_output_opens_its_own_folder_not_whole_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            output = root / "build/app/outputs/bundle/release"
+            output.mkdir(parents=True)
+            (output / "app-release.aab").write_bytes(b"bundle")
+            # Unrelated plugin build caches that Flutter always leaves under
+            # build/ regardless of which output was actually produced — these
+            # must not cause the whole build/ root to be opened.
+            (root / "build/mobile_scanner").mkdir(parents=True)
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("flutter", root)),
+                [output],
+            )
+
     def test_output_directories_cover_tauri_gradle_and_xcode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

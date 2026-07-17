@@ -1238,19 +1238,26 @@ def pattern_static_prefix(pattern: str) -> Optional[str]:
     return "/".join(segments) if segments else None
 
 
-def preferred_output_roots(project: Project) -> List[Path]:
+def preferred_output_roots(project: Project, artifacts: Sequence[Path]) -> List[Path]:
     """Derive common output roots per project type straight from ARTIFACT_PATTERNS.
 
-    Prefixes sharing the same top-level path segment are collapsed to their
-    common ancestor (e.g. flutter's four patterns all live under "build" and
-    become one root), while prefixes under different top-level segments stay
-    separate (e.g. tauri's "src-tauri/..." and "signing/build").
+    Only prefixes that actually produced an artifact this build are considered,
+    so a single-output build (e.g. just an .aab) opens its own specific folder
+    instead of the noisy shared "build" root. Prefixes sharing the same
+    top-level path segment are collapsed to their common ancestor only when
+    more than one of them has real output (e.g. flutter producing both an
+    .aab and build/web), while prefixes under different top-level segments
+    stay separate (e.g. tauri's "src-tauri/..." and "signing/build").
     """
     groups: Dict[str, List[str]] = {}
     for pattern in ARTIFACT_PATTERNS.get(project.type, []):
         prefix = pattern_static_prefix(pattern)
-        if prefix:
-            groups.setdefault(prefix.split("/", 1)[0], []).append(prefix)
+        if not prefix:
+            continue
+        resolved = (project.path / prefix).resolve()
+        if not any(artifact == resolved or resolved in artifact.parents for artifact in artifacts):
+            continue
+        groups.setdefault(prefix.split("/", 1)[0], []).append(prefix)
     return [project.path / os.path.commonpath(prefixes) for prefixes in groups.values()]
 
 
@@ -1263,7 +1270,7 @@ def artifact_output_directories(project: Project) -> List[Path]:
 
     selected: Set[Path] = set()
     covered: Set[Path] = set()
-    for root in preferred_output_roots(project):
+    for root in preferred_output_roots(project, artifacts):
         resolved_root = root.resolve()
         matches = {
             artifact for artifact in artifacts
