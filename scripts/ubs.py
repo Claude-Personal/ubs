@@ -950,6 +950,13 @@ def artifact_output_directories(project: Project) -> List[Path]:
             selected.add(artifact.parent)
         elif artifact.is_dir():
             selected.add(artifact)
+
+    if project.type == "tauri":
+        signed_root = (project.path / "signing" / "build").resolve()
+        raw_bundle_root = (project.path / "src-tauri" / "target" / "release" / "bundle").resolve()
+        if signed_root in selected:
+            selected.discard(raw_bundle_root)
+
     return sorted(selected, key=str)
 
 

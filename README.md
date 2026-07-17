@@ -79,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 
 > **2.x에서 3.x로 올릴 때:** 2.x updater는 Python/Rust 관리 파일을 받을 수 없으므로 위 `UBS_FORCE=true` 설치 명령을 한 번 사용해야 합니다. 3.x 설치가 끝난 뒤에는 `./build.sh update`가 전체 25개 관리 파일을 갱신합니다.
 
-설치기는 기본적으로 `v3.5.3` release ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
+설치기는 기본적으로 `v3.5.4` release ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
 
 설치기는 기본적으로 대상 `.gitignore`에 `.ubs`, 환경파일, 서명 자료를 보호하는 멱등 블록을 추가합니다. 저장소 정책상 직접 관리해야 한다면 `UBS_MANAGE_GITIGNORE=false`를 명시할 수 있습니다.
 

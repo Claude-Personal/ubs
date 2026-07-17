@@ -54,9 +54,11 @@ class PythonCoreTests(unittest.TestCase):
             package.mkdir(parents=True)
             (bundle / "app.deb").write_bytes(b"deb")
             (package / "app.pkg").write_bytes(b"pkg")
+            # A signed package supersedes the raw bundle output it was built
+            # from — only the final distributable folder should open.
             self.assertEqual(
                 ubs.artifact_output_directories(ubs.Project("tauri", root)),
-                [package, root / "src-tauri/target/release/bundle"],
+                [package],
             )
 
             gradle_output = root / "app/build/outputs/apk/release"
@@ -72,6 +74,17 @@ class PythonCoreTests(unittest.TestCase):
             self.assertEqual(
                 ubs.artifact_output_directories(ubs.Project("ios-xcode", root)),
                 [root / "build/ubs"],
+            )
+
+    def test_unsigned_tauri_build_still_opens_raw_bundle_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            bundle = root / "src-tauri/target/release/bundle/dmg"
+            bundle.mkdir(parents=True)
+            (bundle / "app.dmg").write_bytes(b"dmg")
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("tauri", root)),
+                [root / "src-tauri/target/release/bundle"],
             )
 
     def test_output_folder_opening_is_cross_platform_and_opt_in_safe(self) -> None:
