@@ -2,6 +2,7 @@
 """Cross-platform tests for the Python-only orchestration contract."""
 
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import importlib.util
 import json
 import os
@@ -140,7 +141,8 @@ class PythonCoreTests(unittest.TestCase):
                 self.assertFalse(ubs.resolve_non_interactive_default(root))
             config = json.loads((root / ".ubs" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(config["non_interactive_default"], False)
-            with mock.patch("builtins.input", side_effect=AssertionError("should not prompt twice")):
+            with mock.patch.object(ubs, "sys", self._mock_tty(True)), \
+                    mock.patch("builtins.input", side_effect=AssertionError("should not prompt twice")):
                 self.assertFalse(ubs.resolve_non_interactive_default(root))
 
     def test_local_default_prompt_skips_without_a_real_tty(self) -> None:
@@ -151,6 +153,182 @@ class PythonCoreTests(unittest.TestCase):
                 self.assertTrue(ubs.resolve_non_interactive_default(root))
                 self.assertFalse(ubs.resolve_obfuscate_default(root))
             self.assertFalse((root / ".ubs" / "config.json").exists())
+
+    def test_saved_local_defaults_never_affect_non_tty_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = root / ".ubs" / "config.json"
+            config.parent.mkdir()
+            config.write_text(
+                '{"non_interactive_default":false,"obfuscate_js_default":true}',
+                encoding="utf-8",
+            )
+            with mock.patch.object(ubs, "sys", self._mock_tty(False)), \
+                    mock.patch("builtins.input", side_effect=AssertionError("must not prompt")):
+                self.assertTrue(ubs.resolve_non_interactive_default(root))
+                self.assertFalse(ubs.resolve_obfuscate_default(root))
+
+    def test_publish_default_is_always_false_without_tty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = root / ".ubs" / "config.json"
+            config.parent.mkdir()
+            config.write_text('{"publish_default":true}', encoding="utf-8")
+            with mock.patch.object(ubs, "sys", self._mock_tty(False)), \
+                    mock.patch("builtins.input", side_effect=AssertionError("must not prompt")):
+                self.assertFalse(ubs.resolve_publish_default(root))
+
+    def test_publish_apple_rejects_missing_environment_without_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact = root / "Demo.ipa"
+            artifact.write_bytes(b"ipa")
+            with mock.patch.object(ubs.platform, "system", return_value="Darwin"), \
+                    mock.patch.object(ubs.subprocess, "run") as process:
+                status = ubs.publish_apple(artifact, ubs.Project("ios-xcode", root), {})
+            self.assertEqual(status, 1)
+            process.assert_not_called()
+
+    def test_publish_apple_uses_exact_altool_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact = root / "Demo.ipa"
+            artifact.write_bytes(b"ipa")
+            environment = {
+                "ASC_API_KEY_ID": "KEY123",
+                "ASC_API_ISSUER_ID": "issuer-123",
+                "ASC_APPLE_ID": "123456789",
+                "ASC_BUNDLE_ID": "com.example.demo",
+                "ASC_BUNDLE_VERSION": "42",
+                "ASC_BUNDLE_SHORT_VERSION": "1.2.3",
+            }
+            result = mock.Mock(returncode=0, stdout="uploaded\n", stderr="")
+            with mock.patch.object(ubs.platform, "system", return_value="Darwin"), \
+                    mock.patch.object(ubs.subprocess, "run", return_value=result) as process:
+                status = ubs.publish_apple(
+                    artifact, ubs.Project("ios-xcode", root), environment,
+                )
+            self.assertEqual(status, 0)
+            expected = [
+                "xcrun", "altool", "--upload-package", str(artifact),
+                "--type", "ios", "--apiKey", "KEY123",
+                "--apiIssuer", "issuer-123", "--apple-id", "123456789",
+                "--bundle-id", "com.example.demo", "--bundle-version", "42",
+                "--bundle-short-version-string", "1.2.3",
+            ]
+            process.assert_called_once_with(expected, capture_output=True, text=True)
+            self.assertNotIn("--wait", expected)
+
+    def test_publish_apple_rejects_non_macos_without_subprocess(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            artifact = root / "Demo.ipa"
+            with mock.patch.object(ubs.platform, "system", return_value="Linux"), \
+                    mock.patch.object(ubs.subprocess, "run") as process:
+                status = ubs.publish_apple(artifact, ubs.Project("ios-xcode", root), {})
+            self.assertEqual(status, 1)
+            process.assert_not_called()
+
+    def test_google_play_track_publish_replaces_completed_release_not_stacks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            account_path = root / "service-account.json"
+            account_path.write_text(json.dumps({
+                "private_key": "fake", "private_key_id": "kid", "client_email": "svc@example.com",
+            }), encoding="utf-8")
+            artifact = root / "app.aab"
+            artifact.write_bytes(b"aab-bytes")
+
+            class FakeResponse:
+                def __init__(self, data, headers=None):
+                    self._data = data
+                    self.headers = headers or {}
+
+                def read(self):
+                    return self._data
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            put_bodies = []
+
+            def fake_urlopen(request):
+                url, method = request.full_url, request.get_method()
+                if "oauth2.googleapis.com/token" in url:
+                    return FakeResponse(json.dumps({"access_token": "tok"}).encode())
+                if url.endswith("/edits") and method == "POST":
+                    return FakeResponse(json.dumps({"id": "edit1"}).encode())
+                if "uploadType=resumable" in url:
+                    return FakeResponse(b"", {"Location": "https://upload.example/session"})
+                if url == "https://upload.example/session":
+                    return FakeResponse(json.dumps({"versionCode": 42}).encode())
+                if url.endswith("/tracks/internal") and method == "GET":
+                    return FakeResponse(json.dumps({
+                        "track": "internal",
+                        "releases": [
+                            {"status": "completed", "versionCodes": ["10"]},
+                            {"status": "draft", "versionCodes": ["11"]},
+                        ],
+                    }).encode())
+                if url.endswith("/tracks/internal") and method == "PUT":
+                    put_bodies.append(json.loads(request.data))
+                    return FakeResponse(b"{}")
+                if url.endswith(":validate") or url.endswith(":commit"):
+                    return FakeResponse(b"{}")
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+            environment = {
+                "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON": str(account_path),
+                "GOOGLE_PLAY_PACKAGE_NAME": "com.example.app",
+            }
+            with mock.patch.object(ubs, "build_google_jwt", return_value="fake.jwt.token"), \
+                    mock.patch.object(ubs.urllib.request, "urlopen", side_effect=fake_urlopen):
+                status = ubs.publish_google_play(artifact, ubs.Project("android", root), environment)
+            self.assertEqual(status, 0)
+            self.assertEqual(len(put_bodies), 1)
+            releases = put_bodies[0]["releases"]
+            self.assertEqual(len(releases), 2)
+            completed = [item for item in releases if item["status"] == "completed"]
+            self.assertEqual(completed, [{"status": "completed", "versionCodes": ["42"]}])
+            self.assertEqual([item for item in releases if item["status"] == "draft"],
+                              [{"status": "draft", "versionCodes": ["11"]}])
+
+    def test_google_jwt_contains_compact_rs256_header_and_claims(self) -> None:
+        account = {
+            "private_key": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+            "private_key_id": "kid-123",
+            "client_email": "publisher@example.iam.gserviceaccount.com",
+        }
+        result = mock.Mock(returncode=0, stdout=b"fake-signature", stderr=b"")
+        with mock.patch.object(ubs.subprocess, "run", return_value=result) as process:
+            jwt = ubs.build_google_jwt(account, 1_700_000_000)
+        header_part, claims_part, signature_part = jwt.split(".")
+
+        def decode(part):
+            return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+
+        self.assertEqual(
+            decode(header_part), {"alg": "RS256", "typ": "JWT", "kid": "kid-123"},
+        )
+        self.assertEqual(decode(claims_part), {
+            "iss": account["client_email"],
+            "scope": "https://www.googleapis.com/auth/androidpublisher",
+            "aud": "https://oauth2.googleapis.com/token",
+            "iat": 1_700_000_000,
+            "exp": 1_700_003_600,
+        })
+        self.assertEqual(
+            base64.urlsafe_b64decode(signature_part + "=" * (-len(signature_part) % 4)),
+            b"fake-signature",
+        )
+        command = process.call_args.args[0]
+        self.assertEqual(command[:4], ["openssl", "dgst", "-sha256", "-sign"])
+        self.assertNotIn(b"\n", process.call_args.kwargs["input"])
+        self.assertEqual(process.call_args.kwargs["stdout"], ubs.subprocess.PIPE)
+        self.assertEqual(process.call_args.kwargs["stderr"], ubs.subprocess.PIPE)
 
     def test_obfuscate_default_prompt_persists_choice(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -8,6 +8,7 @@ planning, process orchestration, JSON output, and build reports.
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 from concurrent.futures import as_completed, ThreadPoolExecutor
 from functools import lru_cache
@@ -22,8 +23,12 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
@@ -109,6 +114,7 @@ USAGE = """Universal Build Script
   ./build.sh --interactive           버전과 플랫폼을 직접 선택
   ./build.sh build --project <경로>  지정 프로젝트 빌드
   ./build.sh build --all --type TYPE 특정 타입만 빌드
+  ./build.sh publish [--project PATH] [--track TRACK]  기존 스토어 산출물 업로드
 
 주요 옵션:
   --version-bump none|build|patch|minor|major
@@ -116,6 +122,7 @@ USAGE = """Universal Build Script
   --flutter-outputs auto|appbundle,apk,ipa,web
   --clean | --skip-clean
   --obfuscate-js | --no-obfuscate-js  Tauri 프런트엔드 JS 난독화 (첫 Tauri 빌드에서 기본값을 물어봄)
+  --publish | --no-publish            빌드 성공 후 스토어 업로드 강제/비활성화
   --fail-fast
   --jobs N                            독립 프로젝트 제한 병렬 빌드
   --report-json <파일>               실제 빌드 결과 JSON 저장
@@ -148,6 +155,8 @@ class Options:
     flutter_outputs: str = os.environ.get("UBS_FLUTTER_OUTPUTS", "auto")
     obfuscate_js: bool = os.environ.get("TAURI_OBFUSCATE_JS", "false") == "true"
     obfuscate_js_explicit: bool = "TAURI_OBFUSCATE_JS" in os.environ
+    publish: Optional[bool] = None
+    track: Optional[str] = None
     type_filter: str = ""
     project_path: Optional[Path] = None
     report_json: Optional[Path] = None
@@ -898,6 +907,310 @@ def discover_artifacts(project: Project) -> List[str]:
     return sorted(found)
 
 
+def project_bundle_versions(
+    project: Project, environment: Dict[str, str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Return (bundle version, short version) without guessing from artifact names."""
+    pubspec = project.path / "pubspec.yaml"
+    match = re.search(r"^version:\s*([^\s+#]+)(?:\+([^\s#]+))?", read_text(pubspec), re.MULTILINE)
+    if match:
+        short_version, bundle_version = match.group(1), match.group(2)
+        if bundle_version:
+            return bundle_version, short_version
+        return environment.get("ASC_BUNDLE_VERSION"), short_version
+    if project.type == "ios-xcode":
+        values: Dict[str, str] = {}
+        for path in project.path.glob("*.xcodeproj/project.pbxproj"):
+            text = read_text(path)
+            for key in ("CURRENT_PROJECT_VERSION", "MARKETING_VERSION"):
+                found = re.search(rf"\b{key}\s*=\s*([^;]+);", text)
+                if found:
+                    values[key] = found.group(1).strip().strip('"')
+            if len(values) == 2:
+                return values["CURRENT_PROJECT_VERSION"], values["MARKETING_VERSION"]
+    return (
+        environment.get("ASC_BUNDLE_VERSION"),
+        environment.get("ASC_BUNDLE_SHORT_VERSION"),
+    )
+
+
+def publish_apple(
+    artifact: Path, project: Project, environment: Dict[str, str],
+) -> int:
+    if platform.system() != "Darwin":
+        eprint(f"{RED}App Store Connect 업로드는 macOS에서만 실행할 수 있습니다.{NC}")
+        return 1
+    required = ("ASC_API_KEY_ID", "ASC_API_ISSUER_ID", "ASC_APPLE_ID", "ASC_BUNDLE_ID")
+    missing = [key for key in required if not environment.get(key)]
+    if missing:
+        eprint(f"{RED}App Store Connect 환경변수가 없습니다: {', '.join(missing)}{NC}")
+        return 1
+    suffix = artifact.suffix.lower()
+    if suffix not in {".ipa", ".pkg"}:
+        eprint(f"{RED}App Store Connect에서 지원하지 않는 산출물입니다: {artifact}{NC}")
+        return 1
+    bundle_version, short_version = project_bundle_versions(project, environment)
+    missing_versions = []
+    if not bundle_version:
+        missing_versions.append("ASC_BUNDLE_VERSION")
+    if not short_version:
+        missing_versions.append("ASC_BUNDLE_SHORT_VERSION")
+    if missing_versions:
+        eprint(f"{RED}앱 버전을 확인할 수 없습니다. 환경변수를 설정하세요: {', '.join(missing_versions)}{NC}")
+        return 1
+    kind = "ios" if suffix == ".ipa" else "macos"
+    print(
+        f"{CYAN}스토어 업로드: {artifact} → App Store Connect 앱 "
+        f"{environment['ASC_APPLE_ID']} ({environment['ASC_BUNDLE_ID']}){NC}"
+    )
+    command = [
+        "xcrun", "altool", "--upload-package", str(artifact),
+        "--type", kind,
+        "--apiKey", environment["ASC_API_KEY_ID"],
+        "--apiIssuer", environment["ASC_API_ISSUER_ID"],
+        "--apple-id", environment["ASC_APPLE_ID"],
+        "--bundle-id", environment["ASC_BUNDLE_ID"],
+        "--bundle-version", bundle_version,
+        "--bundle-short-version-string", short_version,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as error:
+        eprint(f"{RED}altool을 실행할 수 없습니다: {error}{NC}")
+        return 1
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    return result.returncode
+
+
+def base64url(value: bytes) -> bytes:
+    return base64.urlsafe_b64encode(value).rstrip(b"=")
+
+
+def build_google_jwt(service_account: dict, now: int) -> str:
+    required = ("private_key", "private_key_id", "client_email")
+    missing = [key for key in required if not service_account.get(key)]
+    if missing:
+        raise ValueError(f"서비스 계정 JSON 필드가 없습니다: {', '.join(missing)}")
+    header = {"alg": "RS256", "typ": "JWT", "kid": service_account["private_key_id"]}
+    claims = {
+        "iss": service_account["client_email"],
+        "scope": "https://www.googleapis.com/auth/androidpublisher",
+        "aud": "https://oauth2.googleapis.com/token",
+        "iat": now,
+        "exp": now + 3600,
+    }
+    encoded = [
+        base64url(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+        for value in (header, claims)
+    ]
+    signing_input = b".".join(encoded)
+    temporary = tempfile.NamedTemporaryFile(prefix="ubs-google-key-", delete=False)
+    key_path = temporary.name
+    temporary.close()
+    os.unlink(key_path)
+    try:
+        descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as key_file:
+            key_file.write(str(service_account["private_key"]))
+        try:
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", key_path],
+                input=signing_input, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False,
+            )
+        except OSError as error:
+            raise ValueError(f"openssl을 실행할 수 없습니다: {error}") from error
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace")
+            raise ValueError(f"Google JWT RSA 서명에 실패했습니다: {detail}")
+        return b".".join((*encoded, base64url(result.stdout))).decode("ascii")
+    finally:
+        try:
+            os.unlink(key_path)
+        except FileNotFoundError:
+            pass
+
+
+def google_request(
+    url: str, method: str, token: Optional[str] = None,
+    body: Optional[bytes] = None, headers: Optional[Dict[str, str]] = None,
+) -> tuple[bytes, object]:
+    request_headers = dict(headers or {})
+    if token:
+        request_headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(
+        url, data=body, method=method, headers=request_headers,
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.read(), response.headers
+    except urllib.error.HTTPError as error:
+        if error.code == 308:
+            return error.read(), error.headers
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {error.code} {method} {url}: {detail}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"네트워크 오류 {method} {url}: {error.reason}") from error
+
+
+def google_json_request(
+    url: str, method: str, token: Optional[str] = None,
+    payload: Optional[dict] = None, headers: Optional[Dict[str, str]] = None,
+) -> tuple[dict, object]:
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    raw, response_headers = google_request(url, method, token, body, request_headers)
+    try:
+        value = json.loads(raw or b"{}")
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Google API 응답 JSON을 해석할 수 없습니다: {raw.decode(errors='replace')}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("Google API 응답 형식이 올바르지 않습니다.")
+    return value, response_headers
+
+
+def publish_google_play(
+    artifact: Path, project: Project, environment: Dict[str, str],
+) -> int:
+    del project
+    required = ("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "GOOGLE_PLAY_PACKAGE_NAME")
+    missing = [key for key in required if not environment.get(key)]
+    if missing:
+        eprint(f"{RED}Google Play 환경변수가 없습니다: {', '.join(missing)}{NC}")
+        return 1
+    track = environment.get("GOOGLE_PLAY_TRACK", "internal")
+    if track not in {"internal", "alpha", "beta", "production"}:
+        eprint(f"{RED}잘못된 Google Play 트랙: {track}{NC}")
+        return 1
+    account_path = Path(environment["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"]).expanduser()
+    try:
+        service_account = json.loads(account_path.read_text(encoding="utf-8"))
+        if not isinstance(service_account, dict):
+            raise ValueError("JSON 최상위 값이 객체가 아닙니다.")
+        jwt = build_google_jwt(service_account, int(time.time()))
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        eprint(f"{RED}Google Play 서비스 계정을 읽을 수 없습니다: {error}{NC}")
+        return 1
+    package = environment["GOOGLE_PLAY_PACKAGE_NAME"]
+    print(f"{CYAN}스토어 업로드: {artifact} → Google Play 앱 {package}, 트랙 {track}{NC}")
+    try:
+        token_body = urllib.parse.urlencode({
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": jwt,
+        }).encode()
+        token_raw, _ = google_request(
+            "https://oauth2.googleapis.com/token", "POST", body=token_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            token_response = json.loads(token_raw)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"OAuth token 응답 JSON을 해석할 수 없습니다: {token_raw.decode(errors='replace')}"
+            ) from error
+        token = token_response.get("access_token") if isinstance(token_response, dict) else None
+        if not token:
+            raise RuntimeError(f"access_token이 응답에 없습니다: {token_raw.decode(errors='replace')}")
+        encoded_package = urllib.parse.quote(package, safe="")
+        edits_url = (
+            "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/"
+            f"{encoded_package}/edits"
+        )
+        edit, _ = google_json_request(edits_url, "POST", token, {})
+        edit_id = edit.get("id")
+        if not edit_id:
+            raise RuntimeError(f"editId가 응답에 없습니다: {json.dumps(edit, ensure_ascii=False)}")
+        encoded_edit = urllib.parse.quote(str(edit_id), safe="")
+        upload_url = (
+            "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
+            f"{encoded_package}/edits/{encoded_edit}/bundles?uploadType=resumable"
+        )
+        _, upload_headers = google_request(
+            upload_url, "POST", token, body=b"",
+            headers={"X-Upload-Content-Type": "application/octet-stream"},
+        )
+        session_url = upload_headers.get("Location")
+        if not session_url:
+            raise RuntimeError("resumable 업로드 응답에 Location 헤더가 없습니다.")
+        total = artifact.stat().st_size
+        if total == 0:
+            raise RuntimeError(f"빈 AAB 파일은 업로드할 수 없습니다: {artifact}")
+        uploaded: dict = {}
+        chunk_size = 8 * 1024 * 1024
+        start = 0
+        end = -1
+        with artifact.open("rb") as bundle_file:
+            while start < total:
+                chunk = bundle_file.read(chunk_size)
+                end = start + len(chunk) - 1
+                raw, _ = google_request(
+                    str(session_url), "PUT", token, body=chunk,
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"bytes {start}-{end}/{total}",
+                    },
+                )
+                if end + 1 == total:
+                    uploaded = json.loads(raw)
+                start = end + 1
+        version_code = uploaded.get("versionCode") if isinstance(uploaded, dict) else None
+        if version_code is None:
+            raise RuntimeError(f"업로드 응답에 versionCode가 없습니다: {uploaded}")
+        track_url = (
+            f"{edits_url}/{encoded_edit}/tracks/"
+            f"{urllib.parse.quote(track, safe='')}"
+        )
+        track_state, _ = google_json_request(track_url, "GET", token)
+        releases = track_state.get("releases", [])
+        if not isinstance(releases, list):
+            releases = []
+        # A track carries at most one "completed" (fully rolled out) release;
+        # stacking a new one alongside the old without replacing it leaves an
+        # ambiguous multi-completed-release state on every repeat publish.
+        releases = [item for item in releases if not (isinstance(item, dict) and item.get("status") == "completed")]
+        releases.append({"status": "completed", "versionCodes": [str(version_code)]})
+        track_state["track"] = track_state.get("track", track)
+        track_state["releases"] = releases
+        google_json_request(track_url, "PUT", token, track_state)
+        google_json_request(f"{edits_url}/{encoded_edit}:validate", "POST", token, {})
+        google_json_request(f"{edits_url}/{encoded_edit}:commit", "POST", token, {})
+    except (OSError, json.JSONDecodeError, RuntimeError) as error:
+        # TODO: Query the resumable session offset and retry from the logged byte range.
+        upload_point = f", 마지막 시도 바이트 {start}-{end}" if "start" in locals() else ""
+        eprint(f"{RED}Google Play 업로드 실패 ({artifact}{upload_point}): {error}{NC}")
+        return 1
+    print(f"{GREEN}Google Play 업로드 완료: {artifact} → {track}{NC}")
+    return 0
+
+
+def publish_project(
+    project: Project, options: Options, environment: Dict[str, str],
+) -> int:
+    artifacts = [Path(value) for value in discover_artifacts(project)]
+    publishable = [path for path in artifacts if path.suffix.lower() in {".ipa", ".pkg", ".aab"}]
+    if not publishable:
+        eprint(f"{YELLOW}업로드할 스토어 산출물이 없습니다: {project.path}{NC}")
+        return 1
+    publish_environment = environment.copy()
+    if options.track is not None:
+        publish_environment["GOOGLE_PLAY_TRACK"] = options.track
+    elif publish_environment.get("GOOGLE_PLAY_TRACK") == "production" and any(
+        path.suffix.lower() == ".aab" for path in publishable
+    ):
+        eprint(f"{YELLOW}경고: --track production 없이 환경변수로 production 트랙이 선택되었습니다.{NC}")
+    statuses = []
+    for artifact in publishable:
+        if artifact.suffix.lower() == ".aab":
+            statuses.append(publish_google_play(artifact, project, publish_environment))
+        else:
+            statuses.append(publish_apple(artifact, project, publish_environment))
+    return 0 if all(status == 0 for status in statuses) else 1
+
+
 def pattern_static_prefix(pattern: str) -> Optional[str]:
     """Portion of an ARTIFACT_PATTERNS glob before its first wildcard segment."""
     segments = []
@@ -1074,7 +1387,7 @@ def parse_options(argv: Sequence[str]) -> Options:
     args = list(argv)
     options = Options()
     if args and args[0] in {
-        "detect", "list", "audit", "plan", "graph", "update", "build",
+        "detect", "list", "audit", "plan", "graph", "update", "build", "publish",
         "node-adapter", "gradle-adapter", "xcode-adapter", "help", "-h", "--help",
     }:
         first = args.pop(0)
@@ -1105,8 +1418,10 @@ def parse_options(argv: Sequence[str]) -> Options:
         elif value == "--clean": options.skip_clean = False
         elif value == "--obfuscate-js": options.obfuscate_js = True; options.obfuscate_js_explicit = True
         elif value == "--no-obfuscate-js": options.obfuscate_js = False; options.obfuscate_js_explicit = True
+        elif value == "--publish": options.publish = True
+        elif value == "--no-publish": options.publish = False
         elif value == "--fail-fast": options.fail_fast = True
-        elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs"}:
+        elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs", "--track"}:
             index += 1
             if index >= len(args): raise ValueError(f"{value} 값이 필요합니다.")
             argument = args[index]
@@ -1116,6 +1431,7 @@ def parse_options(argv: Sequence[str]) -> Options:
             elif value == "--type": options.type_filter = argument
             elif value == "--project": options.project_path = Path(argument)
             elif value == "--report-json": options.report_json = Path(argument).expanduser().absolute()
+            elif value == "--track": options.track = argument
             else:
                 try: options.jobs = int(argument)
                 except ValueError as error: raise ValueError("--jobs는 1 이상의 정수여야 합니다.") from error
@@ -1137,6 +1453,8 @@ def validate_options(options: Options) -> None:
             raise ValueError(f"잘못된 Flutter 출력: {options.flutter_outputs}")
     if options.jobs < 1:
         raise ValueError("--jobs는 1 이상의 정수여야 합니다.")
+    if options.track is not None and options.track not in {"internal", "alpha", "beta", "production"}:
+        raise ValueError(f"잘못된 Google Play 트랙: {options.track}")
 
 
 def selected_projects(options: Options, root: Path) -> List[Project]:
@@ -1526,7 +1844,13 @@ def execute_projects(
     )
     if not options.dry_run:
         open_artifact_directories(successful_projects)
-    return 0 if failed == 0 else 1
+    if failed:
+        if options.publish is not False:
+            eprint(f"{YELLOW}빌드 실패가 있어 발행 단계를 모두 건너뜁니다.{NC}")
+        return 1
+    if should_publish_after_build(options, root):
+        return publish_projects(successful_projects, options, os.environ.copy())
+    return 0
 
 
 def run_update(options: Options) -> int:
@@ -1607,11 +1931,11 @@ def ask_and_remember_default(
     """Ask a yes/no-shaped question once at a real terminal and remember the
     answer in .ubs/config.json. Option 2 means True, unless invert=True makes
     option 2 mean False (used when option 1 is the "positive" choice)."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return non_tty_default
     config = load_local_config(root)
     if config_key in config:
         return bool(config[config_key])
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return non_tty_default
     print(header)
     print(f"  {YELLOW}1) {option_1}{NC}")
     print(f"  {YELLOW}2) {option_2}{NC}")
@@ -1650,6 +1974,51 @@ def resolve_obfuscate_default(root: Path) -> bool:
         option_2="켜기 (매번 자동으로 난독화 적용)",
         override_hint="매 실행마다 --obfuscate-js 또는 --no-obfuscate-js로 재정의할 수 있습니다.",
     )
+
+
+def resolve_publish_default(root: Path) -> bool:
+    """Remember whether a real-terminal build should offer a publish prompt."""
+    return ask_and_remember_default(
+        root, "publish_default", non_tty_default=False,
+        header=f"{CYAN}빌드 성공 후 스토어 업로드는 어떻게 할까요?{NC}",
+        option_1="안 함 (매번 ./build.sh publish 직접 실행)",
+        option_2="빌드 성공 시마다 업로드할지 물어봄",
+        override_hint="매 실행마다 --publish 또는 --no-publish로 재정의할 수 있습니다.",
+    )
+
+
+def should_publish_after_build(options: Options, root: Path) -> bool:
+    if options.publish is False or options.dry_run:
+        return False
+    if options.publish is True:
+        return True
+    if not resolve_publish_default(root):
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        return input("지금 업로드할까요? (y/N) ").strip().lower() in {"y", "yes"}
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{YELLOW}업로드를 취소했습니다.{NC}")
+        return False
+
+
+def publish_projects(
+    projects: Sequence[Project], options: Options, environment: Dict[str, str],
+) -> int:
+    succeeded = failed = 0
+    for project in projects:
+        status = publish_project(project, options, environment)
+        if status == 0:
+            succeeded += 1
+        else:
+            failed += 1
+    print("------------------------------------------------------------")
+    print(
+        f"발행 전체: {len(projects)}  {GREEN}성공: {succeeded}{NC}  "
+        f"{RED}실패: {failed}{NC}"
+    )
+    return 0 if failed == 0 else 1
 
 
 def main(argv: Sequence[str]) -> int:
@@ -1717,6 +2086,16 @@ def main(argv: Sequence[str]) -> int:
                 for project in projects: run_project(project, Options(**{**options.__dict__, "dry_run": True}), report)
             if not projects: eprint("계획할 프로젝트가 없습니다.")
             return 0 if projects else 1
+        if options.command == "publish":
+            if options.json_output:
+                raise ValueError("--json은 publish 명령에서 지원하지 않습니다.")
+            if options.project_path and not projects:
+                eprint(f"{RED}프로젝트 타입을 감지할 수 없습니다: {options.project_path}{NC}")
+                return 1
+            if not projects:
+                eprint(f"{YELLOW}발행할 프로젝트가 없습니다.{NC}")
+                return 1
+            return publish_projects(projects, options, os.environ.copy())
         if options.json_output:
             raise ValueError("--json은 detect, audit, plan 또는 graph 명령에서 지원합니다.")
         if not options.non_interactive_explicit:
@@ -1734,6 +2113,12 @@ def main(argv: Sequence[str]) -> int:
             status = run_project(projects[0], options, report)
             if status == 0 and not options.dry_run:
                 open_artifact_directories(projects)
+            if status != 0:
+                if options.publish is not False:
+                    eprint(f"{YELLOW}빌드 실패가 있어 발행 단계를 모두 건너뜁니다.{NC}")
+                return status
+            if should_publish_after_build(options, root):
+                return publish_projects(projects, options, os.environ.copy())
             return status
         return execute_projects(projects, options, report, root)
     except (ValueError, OSError) as error:
