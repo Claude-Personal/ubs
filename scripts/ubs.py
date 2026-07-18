@@ -1290,9 +1290,19 @@ def artifact_output_directories(project: Project) -> List[Path]:
 
     if project.type == "tauri":
         signed_root = (project.path / "signing" / "build").resolve()
-        raw_bundle_root = (project.path / "src-tauri" / "target" / "release" / "bundle").resolve()
         if signed_root in selected:
-            selected.discard(raw_bundle_root)
+            bundle_roots = {
+                (project.path / "src-tauri" / "target" / "release" / "bundle").resolve(),
+                *(
+                    (project.path / "src-tauri" / "target" / triple / "release" / "bundle").resolve()
+                    for triple in TAURI_TARGET_TRIPLES
+                ),
+            }
+            selected = {
+                path for path in selected
+                if path not in bundle_roots
+                and not any(root in path.parents for root in bundle_roots)
+            }
 
     return sorted(selected, key=str)
 

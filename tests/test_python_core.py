@@ -120,6 +120,26 @@ class PythonCoreTests(unittest.TestCase):
                 [bundle],
             )
 
+    def test_signed_universal_darwin_tauri_build_supersedes_all_triple_bundles(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            bundle_macos = root / "src-tauri/target/universal-apple-darwin/release/bundle/macos"
+            bundle_macos.mkdir(parents=True)
+            (bundle_macos / "App.app").mkdir()
+            bundle_dmg = root / "src-tauri/target/universal-apple-darwin/release/bundle/dmg"
+            bundle_dmg.mkdir(parents=True)
+            (bundle_dmg / "App.dmg").write_bytes(b"dmg")
+            package = root / "signing/build"
+            package.mkdir(parents=True)
+            (package / "App.pkg").write_bytes(b"pkg")
+            # The signed .pkg is the final distributable — every raw
+            # universal-triple bundle folder it was built from (not just the
+            # default non-multi-target path) must be superseded.
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("tauri", root)),
+                [package],
+            )
+
     def test_output_folder_opening_is_cross_platform_and_opt_in_safe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

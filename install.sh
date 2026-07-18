@@ -25,7 +25,7 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 
-VERSION = "3.7.1"
+VERSION = "3.7.2"
 REPOSITORY = "https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
