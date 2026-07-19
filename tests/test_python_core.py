@@ -33,17 +33,24 @@ class PythonCoreTests(unittest.TestCase):
             encoding="utf-8", errors="backslashreplace",
         )
 
-    def test_flutter_artifacts_open_the_common_build_root(self) -> None:
+    def test_flutter_multiple_outputs_open_their_own_folders_not_shared_build_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            output = root / "build/app/outputs/bundle/release"
-            output.mkdir(parents=True)
-            (output / "app-release.aab").write_bytes(b"bundle")
+            aab_output = root / "build/app/outputs/bundle/release"
+            aab_output.mkdir(parents=True)
+            (aab_output / "app-release.aab").write_bytes(b"bundle")
+            ipa_output = root / "build/ios/ipa"
+            ipa_output.mkdir(parents=True)
+            (ipa_output / "app.ipa").write_bytes(b"ipa")
             web = root / "build/web"
             web.mkdir(parents=True)
+            # Each output type gets its own folder — they must not collapse to
+            # the shared "build" segment, which would drag in unrelated
+            # plugin build caches that live under build/ regardless of which
+            # outputs were actually produced.
             self.assertEqual(
                 ubs.artifact_output_directories(ubs.Project("flutter", root)),
-                [root / "build"],
+                sorted([aab_output, ipa_output, web], key=str),
             )
 
     def test_flutter_single_output_opens_its_own_folder_not_whole_build(self) -> None:

@@ -1239,17 +1239,17 @@ def pattern_static_prefix(pattern: str) -> Optional[str]:
 
 
 def preferred_output_roots(project: Project, artifacts: Sequence[Path]) -> List[Path]:
-    """Derive common output roots per project type straight from ARTIFACT_PATTERNS.
+    """Derive output roots per project type straight from ARTIFACT_PATTERNS.
 
     Only prefixes that actually produced an artifact this build are considered,
     so a single-output build (e.g. just an .aab) opens its own specific folder
-    instead of the noisy shared "build" root. Prefixes sharing the same
-    top-level path segment are collapsed to their common ancestor only when
-    more than one of them has real output (e.g. flutter producing both an
-    .aab and build/web), while prefixes under different top-level segments
-    stay separate (e.g. tauri's "src-tauri/..." and "signing/build").
+    instead of the noisy shared "build" root. Two prefixes are only merged
+    when one is an ancestor of the other (nesting) — separate output types
+    that merely share a top-level segment (e.g. flutter's aab under
+    build/app/outputs/... and ipa under build/ios/ipa) stay as distinct
+    folders instead of collapsing to that shared segment.
     """
-    groups: Dict[str, List[str]] = {}
+    resolved_prefixes: List[Path] = []
     for pattern in ARTIFACT_PATTERNS.get(project.type, []):
         prefix = pattern_static_prefix(pattern)
         if not prefix:
@@ -1257,8 +1257,22 @@ def preferred_output_roots(project: Project, artifacts: Sequence[Path]) -> List[
         resolved = (project.path / prefix).resolve()
         if not any(artifact == resolved or resolved in artifact.parents for artifact in artifacts):
             continue
-        groups.setdefault(prefix.split("/", 1)[0], []).append(prefix)
-    return [project.path / os.path.commonpath(prefixes) for prefixes in groups.values()]
+        resolved_prefixes.append(resolved)
+
+    roots: List[Path] = []
+    for resolved in resolved_prefixes:
+        merged = False
+        for index, existing in enumerate(roots):
+            if existing == resolved or existing in resolved.parents:
+                merged = True
+                break
+            if resolved in existing.parents:
+                roots[index] = resolved
+                merged = True
+                break
+        if not merged:
+            roots.append(resolved)
+    return roots
 
 
 def artifact_output_directories(project: Project) -> List[Path]:
