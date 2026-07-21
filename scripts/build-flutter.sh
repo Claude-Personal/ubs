@@ -322,7 +322,7 @@ build_web() {
     --no-pub
 }
 
-if [ "$PARALLEL_BUILD" = true ]; then
+if [ "$PARALLEL_BUILD" = true ] && [ "$BUILD_ANDROID" = true ] && [ "$BUILD_IOS" = true ]; then
   echo -e "${BLUE}⏱️  Android·iOS 동시 빌드 시작 (로그가 섞여 보일 수 있음)${NC}"
   build_android &
   ANDROID_PID=$!
