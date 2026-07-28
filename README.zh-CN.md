@@ -273,7 +273,7 @@ sequenceDiagram
     end
 ```
 
-更新器阻止路径穿越、符号链接目标、并发写入以及未授权降级。高保证 CI 可设置 `UBS_UPDATE_MANIFEST_SHA256` 固定 manifest，但它不能替代独立签名或透明日志。
+更新器阻止路径穿越、符号链接目标、并发写入以及未授权降级。manifest 受 ECDSA(P-256/SHA-256)签名保护——`install.sh`/`scripts/lib/update.sh` 内置公钥用于验证 `scripts/update-manifest.txt.sig`，签名缺失或无效时即使所有校验和都匹配也会拒绝安装/更新。签名私钥不在本仓库中，只保存在发布负责人本地机器上（不作为 CI secret 存放——否则账号/仓库一旦被攻破，私钥也会一起泄露，失去防御意义）。
 
 ## 隐私、密钥与产物
 

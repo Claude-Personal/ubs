@@ -49,6 +49,22 @@ jobs:
           scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
           diff -u scripts/update-manifest.txt /tmp/update-manifest.txt
 
+      - name: Validate update manifest signature
+        run: |
+          # CI에는 서명 개인키가 없다(의도적 — 있으면 계정 탈취 시 같이 털림).
+          # 여기서는 커밋된 서명이 커밋된 manifest·공개키와 실제로 맞는지만 검증한다.
+          INSTALL_KEY="$(sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' install.sh |
+            sed 's/.*-----BEGIN/-----BEGIN/')"
+          UPDATE_KEY="$(sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' scripts/lib/update.sh |
+            sed "s/^UBS_UPDATE_MANIFEST_PUBLIC_KEY='//; s/'\$//")"
+          if [ "$INSTALL_KEY" != "$UPDATE_KEY" ]; then
+            echo "install.sh와 scripts/lib/update.sh에 박힌 공개키가 서로 다릅니다." >&2
+            exit 1
+          fi
+          echo "$INSTALL_KEY" > /tmp/manifest-pubkey.pem
+          openssl dgst -sha256 -verify /tmp/manifest-pubkey.pem \
+            -signature scripts/update-manifest.txt.sig scripts/update-manifest.txt
+
       - name: Validate Flutter export template
         run: python -c 'import plistlib; plistlib.load(open("templates/flutter/ExportOptions.plist", "rb"))'
 

@@ -319,7 +319,7 @@ sequenceDiagram
     end
 ```
 
-For higher-assurance CI, pin the manifest with `UBS_UPDATE_MANIFEST_SHA256`. The updater blocks path traversal, symbolic-link destinations, concurrent writers, and downgrades unless explicitly permitted. A hash pin is not a substitute for an independent signature or transparency log.
+The manifest is protected by an ECDSA (P-256/SHA-256) signature: `install.sh` and `scripts/lib/update.sh` carry the public key and reject the manifest outright if `scripts/update-manifest.txt.sig` is missing or invalid, even when every file checksum matches. The private signing key never leaves the release maintainer's local machine (never stored as a CI secret) — release: `scripts/generate-update-manifest.sh > scripts/update-manifest.txt && scripts/sign-update-manifest.sh`. The updater also blocks path traversal, symbolic-link destinations, concurrent writers, and downgrades unless explicitly permitted.
 
 ## Privacy and secret hygiene
 
