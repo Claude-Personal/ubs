@@ -1,10 +1,42 @@
 #!/usr/bin/env bash
 
 # Universal Build Script의 제한된 런타임 번들을 안전하게 갱신한다.
-# 원격 manifest는 무결성 확인용이며 별도의 서명 체계를 대체하지 않는다.
+# 원격 manifest는 서명 검증(아래 UBS_UPDATE_MANIFEST_PUBLIC_KEY)으로 무결성을
+# 보장한다 — manifest와 payload가 같은 HTTPS 호스트에서 오므로, 서명이 없으면
+# 그 호스트/레포 자체가 침해됐을 때 위조된 manifest+payload 조합이 체크섬 검증을
+# 그대로 통과할 수 있었다. 서명 개인키는 이 레포에 없고 로컬(릴리스 담당자
+# 머신)에만 있다 — scripts/sign-update-manifest.sh 로 릴리스마다 수동 서명한다.
 
 UBS_UPDATE_DEFAULT_BASE_URL="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main"
 UBS_UPDATE_RELEASE_ROOT="https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
+
+# scripts/sign-update-manifest.sh 로 서명할 때 쓰는 개인키와 짝을 이루는 공개키.
+# 이 상수는 install.sh에도 동일하게 박혀 있다 — 둘 중 하나만 바꾸면 안 되고,
+# CI(validate.yml)가 두 값이 같은지 검사한다.
+UBS_UPDATE_MANIFEST_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoeoaD2VIKDVRGJODMYQiXrlyi2uJ
+CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
+-----END PUBLIC KEY-----'
+
+# manifest에 대한 ECDSA(P-256/SHA-256) 서명을 검증한다. LibreSSL(macOS 기본
+# /usr/bin/openssl)과 OpenSSL 양쪽에서 동작하는 가장 오래되고 넓게 지원되는
+# 방식(dgst -sign/-verify)을 쓴다 — Ed25519는 최신 OpenSSL의 pkeyutl -rawin이
+# 필요해 LibreSSL에서 동작하지 않는다.
+ubs_update_verify_manifest_signature() {
+  local manifest="$1" signature="$2" pubkey_file
+  command -v openssl >/dev/null 2>&1 || {
+    echo "manifest 서명 검증에는 openssl이 필요합니다." >&2
+    return 1
+  }
+  pubkey_file="$(mktemp "${TMPDIR:-/tmp}/ubs-update-pubkey.XXXXXX")" || return 1
+  printf '%s\n' "$UBS_UPDATE_MANIFEST_PUBLIC_KEY" > "$pubkey_file"
+  if ! openssl dgst -sha256 -verify "$pubkey_file" -signature "$signature" "$manifest" >/dev/null 2>&1; then
+    rm -f "$pubkey_file"
+    echo "manifest 서명 검증 실패 — 다운로드 채널이 침해됐을 수 있습니다." >&2
+    return 1
+  fi
+  rm -f "$pubkey_file"
+}
 
 ubs_update_allowed_path() {
   case "$1" in
@@ -157,7 +189,7 @@ ubs_update_restore() {
 
 ubs_run_update() {
   local root="$1" check_only="$2" dry_run="$3"
-  local base_url payload_base_url manifest_url temp_dir manifest remote_version="" seen=""
+  local base_url payload_base_url manifest_url temp_dir manifest manifest_sig remote_version="" seen=""
   local kind value relative extra expected actual local_version changed_count=0
   local required timestamp backup_dir destination install_tmp mode version_order lock_dir i changed_file helper_dir root_helper_dir
   local rust_batch=false rust_source_changed=false
@@ -186,13 +218,15 @@ ubs_run_update() {
     rm -rf "$temp_dir"
     return 1
   fi
-  if [ -n "${UBS_UPDATE_MANIFEST_SHA256:-}" ]; then
-    actual="$(ubs_update_sha256 "$manifest")" || { rm -rf "$temp_dir"; return 1; }
-    if [ "$actual" != "$UBS_UPDATE_MANIFEST_SHA256" ]; then
-      echo "고정한 manifest SHA-256과 일치하지 않습니다." >&2
-      rm -rf "$temp_dir"
-      return 1
-    fi
+  manifest_sig="$temp_dir/update-manifest.txt.sig"
+  if ! ubs_update_fetch "$manifest_url.sig" "$manifest_sig"; then
+    echo "manifest 서명 파일을 가져오지 못했습니다: $manifest_url.sig" >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  if ! ubs_update_verify_manifest_signature "$manifest" "$manifest_sig"; then
+    rm -rf "$temp_dir"
+    return 1
   fi
 
   while IFS=' ' read -r kind value relative extra; do

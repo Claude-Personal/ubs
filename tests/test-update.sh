@@ -18,6 +18,7 @@ sha256_file() {
 
 mkdir -p "$REMOTE/scripts" "$TARGET"
 cp "$REPO_DIR/scripts/update-manifest.txt" "$REMOTE/scripts/update-manifest.txt"
+cp "$REPO_DIR/scripts/update-manifest.txt.sig" "$REMOTE/scripts/update-manifest.txt.sig"
 
 while IFS=' ' read -r kind hash relative extra; do
   [ "$kind" = "file" ] || continue
@@ -146,19 +147,31 @@ assert result["schema_version"] == 1
 assert result["ok"] is True
 assert result["mode"] == "check"
 assert result["status"] == 0
-assert result["local_version"] == "3.7.3"
-assert result["remote_version"] == "3.7.3"
+assert result["local_version"] == "3.8.0"
+assert result["remote_version"] == "3.8.0"
 assert result["changed_paths"] == []
 assert result["backup_path"] is None
 assert isinstance(result["output"], list)
 '
 
+# manifest 서명이 없거나 다른 키로 만들어졌으면(=매니페스트/payload가 서로 다른
+# 채널에서 왔거나 채널 자체가 침해됐을 가능성) 체크섬이 다 맞아도 거부해야 한다.
+rm -f "$REMOTE/scripts/update-manifest.txt.sig"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
-  UBS_UPDATE_MANIFEST_SHA256="$(printf '0%.0s' {1..64})" \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
-  echo "고정 manifest SHA-256 불일치를 허용했습니다." >&2
+  echo "서명 파일 없는 manifest를 허용했습니다." >&2
   exit 1
 fi
+
+openssl ecparam -name prime256v1 -genkey -noout -out "$FIXTURE/wrong-signing-key.pem"
+openssl dgst -sha256 -sign "$FIXTURE/wrong-signing-key.pem" \
+  -out "$REMOTE/scripts/update-manifest.txt.sig" "$REMOTE/scripts/update-manifest.txt"
+if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+  bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
+  echo "다른 키로 만든 서명을 허용했습니다." >&2
+  exit 1
+fi
+cp "$REPO_DIR/scripts/update-manifest.txt.sig" "$REMOTE/scripts/update-manifest.txt.sig"
 
 mkdir -p "$TARGET/.ubs/backups/old-test"
 touch -t 202001010000 "$TARGET/.ubs/backups/old-test"
@@ -196,7 +209,7 @@ fi
 }
 
 # 원격 버전이 더 낮으면 명시적 허용 없이 적용하지 않아야 한다.
-sed 's/^version 3\.7\.3$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
+sed 's/^version 3\.8\.0$/version 2.0.0/' "$REPO_DIR/scripts/update-manifest.txt" \
   > "$REMOTE/scripts/update-manifest.txt"
 if UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check >/dev/null 2>&1; then
