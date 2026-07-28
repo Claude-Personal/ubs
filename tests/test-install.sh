@@ -93,6 +93,7 @@ fi
 
 # 모든 다운로드가 끝나기 전에 실패하면 대상에는 관리 파일을 하나도 적용하지 않는다.
 cp "$ROOT/scripts/update-manifest.txt" "$FIXTURE/incomplete-remote/scripts/update-manifest.txt"
+cp "$ROOT/scripts/update-manifest.txt.sig" "$FIXTURE/incomplete-remote/scripts/update-manifest.txt.sig"
 while IFS=' ' read -r kind hash relative extra; do
   [ "$kind" = file ] || continue
   mkdir -p "$FIXTURE/incomplete-remote/$(dirname "$relative")"
@@ -106,6 +107,24 @@ if UBS_INSTALL_BASE_URL="file://$FIXTURE/incomplete-remote/" UBS_INSTALL_ALLOW_F
 fi
 [ ! -e "$FIXTURE/incomplete-target/VERSION" ] || {
   echo "다운로드 실패 후 부분 설치 파일이 남았습니다." >&2
+  exit 1
+}
+
+# manifest 서명이 없거나 위조됐으면 체크섬이 다 맞아도 설치를 거부해야 한다.
+mkdir -p "$FIXTURE/unsigned-remote/scripts" "$FIXTURE/unsigned-target"
+while IFS=' ' read -r kind hash relative extra; do
+  [ "$kind" = "file" ] || continue
+  mkdir -p "$FIXTURE/unsigned-remote/$(dirname "$relative")"
+  cp "$ROOT/$relative" "$FIXTURE/unsigned-remote/$relative"
+done < "$ROOT/scripts/update-manifest.txt"
+cp "$ROOT/scripts/update-manifest.txt" "$FIXTURE/unsigned-remote/scripts/update-manifest.txt"
+if UBS_INSTALL_BASE_URL="file://$FIXTURE/unsigned-remote/" UBS_INSTALL_ALLOW_FILE=true \
+  bash -c 'cd "$1" && bash "$2"' _ "$FIXTURE/unsigned-target" "$ROOT/install.sh" >/dev/null 2>&1; then
+  echo "설치기가 서명 파일 없는 manifest를 허용했습니다." >&2
+  exit 1
+fi
+[ ! -e "$FIXTURE/unsigned-target/VERSION" ] || {
+  echo "서명 검증 실패 후 부분 설치 파일이 남았습니다." >&2
   exit 1
 }
 

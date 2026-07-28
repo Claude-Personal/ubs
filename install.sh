@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import subprocess
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -25,7 +27,18 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 
-VERSION = "3.7.3"
+# scripts/sign-update-manifest.sh 로 서명할 때 쓰는 개인키와 짝을 이루는 공개키.
+# scripts/lib/update.sh 에도 동일하게 박혀 있다 — 둘 중 하나만 바꾸면 안 되고,
+# CI(validate.yml)가 두 값이 같은지 검사한다. manifest와 payload가 같은 HTTPS
+# 호스트에서 오므로, 서명이 없으면 그 호스트/레포 자체가 침해됐을 때 위조된
+# manifest+payload 조합이 체크섬 검증을 그대로 통과할 수 있었다.
+MANIFEST_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoeoaD2VIKDVRGJODMYQiXrlyi2uJ
+CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
+-----END PUBLIC KEY-----
+"""
+
+VERSION = "3.8.0"
 REPOSITORY = "https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
@@ -91,6 +104,31 @@ def fetch(relative: str) -> bytes:
             if attempt < 2:
                 time.sleep(0.25 * (attempt + 1))
     raise RuntimeError(f"download failed: {relative}: {last_error}")
+
+
+def verify_manifest_signature(manifest: bytes, signature: bytes) -> None:
+    # LibreSSL(macOS 기본 /usr/bin/openssl)과 OpenSSL 양쪽에서 동작하는 가장
+    # 오래되고 넓게 지원되는 방식(dgst -sign/-verify, ECDSA P-256/SHA-256)을
+    # 쓴다 — Ed25519는 최신 OpenSSL의 pkeyutl -rawin이 필요해 LibreSSL에서
+    # 동작하지 않는다.
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError("manifest 서명 검증에는 openssl이 필요합니다.")
+    with tempfile.TemporaryDirectory(prefix="ubs-install-verify-") as tmp:
+        tmp_path = Path(tmp)
+        pubkey_file = tmp_path / "pubkey.pem"
+        manifest_file = tmp_path / "manifest.txt"
+        signature_file = tmp_path / "manifest.sig"
+        pubkey_file.write_text(MANIFEST_PUBLIC_KEY_PEM, encoding="utf-8")
+        manifest_file.write_bytes(manifest)
+        signature_file.write_bytes(signature)
+        result = subprocess.run(
+            [openssl, "dgst", "-sha256", "-verify", str(pubkey_file),
+             "-signature", str(signature_file), str(manifest_file)],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("manifest 서명 검증 실패 — 다운로드 채널이 침해됐을 수 있습니다.")
 
 
 def parse_manifest(data: bytes) -> Dict[str, str]:
@@ -216,7 +254,9 @@ def main() -> None:
     print(f"Universal Build Script {VERSION} transactional installer ({kind})")
     print(f"source: {BASE_URL}")
 
-    manifest = parse_manifest(fetch("scripts/update-manifest.txt"))
+    manifest_bytes = fetch("scripts/update-manifest.txt")
+    verify_manifest_signature(manifest_bytes, fetch("scripts/update-manifest.txt.sig"))
+    manifest = parse_manifest(manifest_bytes)
     staged: Dict[str, bytes] = {}
     for relative in MANAGED:
         data = fetch(relative)

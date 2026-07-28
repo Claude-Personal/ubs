@@ -440,11 +440,9 @@ sequenceDiagram
     participant B as .ubs/backups
     participant F as 관리 파일
     C->>U: update --check / --dry-run / apply
-    U->>H: manifest 다운로드
+    U->>H: manifest + manifest.sig 다운로드
+    U->>U: ECDSA 서명 검증(내장 공개키)
     U->>U: SemVer·허용 경로·중복·누락 검사
-    opt 외부에서 manifest hash 고정
-        U->>U: UBS_UPDATE_MANIFEST_SHA256 비교
-    end
     U->>F: 로컬 SHA-256 비교
     alt check 또는 dry-run
         U-->>C: 변경 목록만 반환
@@ -482,12 +480,13 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 
 백업은 자동 삭제하지 않습니다. `.ubs/`를 프로젝트 `.gitignore`에 추가하고 `./build.sh update --prune-backups 30`처럼 명시적으로 보존기간을 적용하십시오.
 
-고보증 CI에서는 신뢰한 채널에 기록해 둔 manifest 해시를 `UBS_UPDATE_MANIFEST_SHA256=<64자리 해시>`로 고정할 수 있습니다. 이 값이 있으면 다운로드한 manifest 자체의 SHA-256도 일치해야 업데이트가 진행됩니다.
+manifest는 ECDSA(P-256/SHA-256) 서명으로 보호됩니다 — `install.sh`/`scripts/lib/update.sh`에 박힌 공개키로 `scripts/update-manifest.txt.sig`를 검증하고, 서명이 없거나 다른 키로 만들어졌으면 체크섬이 다 맞아도 설치·업데이트를 거부합니다. manifest와 payload가 같은 HTTPS 호스트에서 오므로, 서명이 없으면 그 호스트/레포 자체가 침해됐을 때 위조된 조합이 체크섬 검증만으로는 걸러지지 않기 때문입니다. 서명 개인키는 이 레포에 없고 릴리스 담당자 로컬 머신에만 둡니다(GitHub Actions secret으로 두면 계정/레포 탈취 시 같이 털려 방어 목적이 무의미해집니다).
 
-관리 파일을 개발·배포할 때는 `VERSION`을 올리고 아래 명령으로 manifest를 다시 생성해야 합니다. CI가 manifest와 실제 파일 해시의 차이를 차단합니다.
+관리 파일을 개발·배포할 때는 `VERSION`을 올리고 아래 순서로 manifest를 다시 생성·서명해야 합니다. CI가 manifest와 실제 파일 해시의 차이, 그리고 서명 유효성을 모두 차단합니다.
 
 ```bash
 scripts/generate-update-manifest.sh > scripts/update-manifest.txt
+scripts/sign-update-manifest.sh   # 기본 키 경로: ~/.ubs-release-signing/ubs-manifest-signing-key.pem
 ```
 
 ## 개인정보·비밀·산출물 보호
@@ -770,7 +769,7 @@ UBS_INSTALL_MODE=always ./build.sh
 | `UBS_ALLOW_SELF_UPDATE` | 폐기됨 | 개별 어댑터 교체를 하지 않고 중앙 `./build.sh update` 사용 안내 |
 | `UBS_UPDATE_BASE_URL` | 공식 `main` raw URL | 사설 mirror 또는 테스트용 업데이트 기준 URL |
 | `UBS_UPDATE_ALLOW_DOWNGRADE` | `false` | 더 낮은 SemVer 적용을 명시적으로 허용 |
-| `UBS_UPDATE_MANIFEST_SHA256` | 비어 있음 | 신뢰 채널에서 받은 업데이트 manifest 해시 고정 |
+| `UBS_SIGNING_KEY` | `~/.ubs-release-signing/ubs-manifest-signing-key.pem` | (릴리스 담당자 전용) `scripts/sign-update-manifest.sh`가 쓸 서명 개인키 경로 |
 | `UBS_BUILD_RUST_HELPER` | `false` | 설치 시 선택형 Rust helper release 빌드 |
 | `UBS_RUST_HELPER` | 자동 | 별도 Rust helper 실행 파일 경로 지정 |
 | `UBS_FORCE` | `false` | 설치 프로그램에서 기존 UBS 파일 덮어쓰기 |
