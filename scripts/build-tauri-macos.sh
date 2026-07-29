@@ -309,6 +309,23 @@ fi
 BUILD_COMPLETED=true
 
 # ==========================================
+# 버전 변경 커밋 (안 하면 uncommitted diff로 계속 쌓임 — #26)
+# ==========================================
+
+if [ "$VERSION_CHANGED" = true ]; then
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git add -- "$CONF" 2>/dev/null
+    if git commit -m "chore: ${APP_NAME} 버전 ${NEW_VERSION}" -- "$CONF" >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ 버전 변경 커밋: chore: ${APP_NAME} 버전 ${NEW_VERSION}${NC}"
+    else
+      echo -e "${YELLOW}⚠️  버전 변경(${NEW_VERSION})을 자동 커밋하지 못했습니다 — 직접 커밋하세요.${NC}" >&2
+    fi
+  else
+    echo -e "${YELLOW}⚠️  git 저장소가 아니라 버전 변경(${NEW_VERSION})이 uncommitted 상태로 남습니다.${NC}" >&2
+  fi
+fi
+
+# ==========================================
 # 빌드 완료 알림
 # ==========================================
 

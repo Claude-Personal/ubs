@@ -345,6 +345,23 @@ fi
 BUILD_COMPLETED=true
 
 # ==========================================
+# 버전 변경 커밋 (안 하면 uncommitted diff로 계속 쌓임 — #26)
+# ==========================================
+
+if [ "$VERSION_CHANGED" = true ]; then
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git add -- "$PUBSPEC" 2>/dev/null
+    if git commit -m "chore: 버전 ${NEW_VERSION}" -- "$PUBSPEC" >/dev/null 2>&1; then
+      echo -e "${GREEN}✅ 버전 변경 커밋: chore: 버전 ${NEW_VERSION}${NC}"
+    else
+      echo -e "${YELLOW}⚠️  버전 변경(${NEW_VERSION})을 자동 커밋하지 못했습니다 — 직접 커밋하세요.${NC}" >&2
+    fi
+  else
+    echo -e "${YELLOW}⚠️  git 저장소가 아니라 버전 변경(${NEW_VERSION})이 uncommitted 상태로 남습니다.${NC}" >&2
+  fi
+fi
+
+# ==========================================
 # 빌드 완료 알림 (결과 폴더는 Python 오케스트레이터가 전체 빌드 종료 후 연다.)
 # ==========================================
 
