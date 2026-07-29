@@ -38,7 +38,7 @@ CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
 -----END PUBLIC KEY-----
 """
 
-VERSION = "3.8.0"
+VERSION = "3.8.1"
 REPOSITORY = "https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
