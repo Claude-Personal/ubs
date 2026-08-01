@@ -83,6 +83,18 @@ curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/m
 
 설치기는 기본적으로 대상 `.gitignore`에 `.ubs`, 환경파일, 서명 자료를 보호하는 멱등 블록을 추가합니다. 저장소 정책상 직접 관리해야 한다면 `UBS_MANAGE_GITIGNORE=false`를 명시할 수 있습니다.
 
+### 검증된 설치 (권장)
+
+위 `curl | bash` 한 줄 설치는 installer·공개키·manifest·payload가 전부 같은 GitHub 저장소 채널에서 오므로, 그 채널 자체가 침해되면 이론상 서명 검증까지 함께 위조될 수 있습니다(자세한 위협 모델은 아래 문단 참고). 이 채널과 독립된 신뢰 기준으로 확인하려면 [GitHub Artifact Attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)(Sigstore 기반, GitHub Actions OIDC로 서명, 공개 Rekor transparency log에 기록)을 먼저 검증한 뒤 실행하십시오.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh -o install.sh
+gh attestation verify install.sh --owner Loop-Suite   # gh CLI 내장 명령, 별도 cosign 설치 불필요
+bash install.sh
+```
+
+`gh attestation verify`는 install.sh가 "Loop-Suite/Universal-Build-Script 저장소의 GitHub Actions 워크플로가 태그 릴리스 시점에 빌드했다"는 사실을 Sigstore transparency log(rekor.sigstore.dev)로 확인합니다. 신뢰 기준이 "이 저장소에 push할 수 있는 사람"에서 "GitHub Actions OIDC 발급자(Fulcio)"로 바뀌므로, 저장소·계정만 탈취해서는 위조된 attestation을 만들 수 없습니다 — 별도로 GitHub의 OIDC 토큰 발급 파이프라인 자체를 침해해야 합니다. 태그 릴리스마다 `.github/workflows/attest-release.yml`이 자동으로 attestation을 생성합니다.
+
 ### 실행
 
 ```bash
@@ -482,7 +494,7 @@ curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/m
 
 manifest는 ECDSA(P-256/SHA-256) 서명으로 보호됩니다 — `install.sh`/`scripts/lib/update.sh`에 박힌 공개키로 `scripts/update-manifest.txt.sig`를 검증하고, 서명이 없거나 다른 키로 만들어졌으면 체크섬이 다 맞아도 설치·업데이트를 거부합니다. manifest와 payload가 같은 HTTPS 호스트에서 오므로, 서명이 없으면 그 호스트/레포 자체가 침해됐을 때 위조된 조합이 체크섬 검증만으로는 걸러지지 않기 때문입니다. 서명 개인키는 이 레포에 없고 릴리스 담당자 로컬 머신에만 둡니다(GitHub Actions secret으로 두면 계정/레포 탈취 시 같이 털려 방어 목적이 무의미해집니다).
 
-**최초 설치와 이후 업데이트의 신뢰 루트는 다릅니다.** `curl | bash`로 하는 최초 설치는 installer(`install.sh`)·공개키·manifest·payload가 전부 같은 GitHub 저장소 채널에서 옵니다 — 즉 최초 설치의 신뢰 루트는 이 저장소 자체이며, 저장소 계정이 침해되면 서명 검증 코드와 공개키까지 함께 위조될 수 있어 이 서명 검증이 막아주지 못합니다. 반면 **이미 설치된 버전**이 `./build.sh update`로 갱신될 때는 공개키가 로컬 디스크(설치 시점에 고정된 `install.sh`/`scripts/lib/update.sh`)에 있으므로, 이후 저장소가 침해돼도 로컬에 고정된 키로 서명이 여전히 검증되어 위조 manifest를 걸러냅니다. 즉 서명 검증은 "설치 이후 공급망 침해"에는 유효하지만, "최초 설치 시점의 저장소 침해"에는 저장소 자체가 유일한 신뢰점이라는 근본적 한계가 있습니다(TUF/Sigstore 같은 독립 transparency log나 별도 도메인 공개가 없는 한). 최소한의 out-of-band 검증 수단으로, 공개키의 SHA-256 fingerprint를 아래에 고정 게시합니다. `install.sh`도 실행 시점에 이 값을 출력하니, 설치 전 이 문서의 값과 반드시 대조하십시오.
+**최초 설치와 이후 업데이트의 신뢰 루트는 다릅니다.** `curl | bash`로 하는 최초 설치는 installer(`install.sh`)·공개키·manifest·payload가 전부 같은 GitHub 저장소 채널에서 옵니다 — 즉 최초 설치의 신뢰 루트는 이 저장소 자체이며, 저장소 계정이 침해되면 서명 검증 코드와 공개키까지 함께 위조될 수 있어 이 서명 검증이 막아주지 못합니다. 반면 **이미 설치된 버전**이 `./build.sh update`로 갱신될 때는 공개키가 로컬 디스크(설치 시점에 고정된 `install.sh`/`scripts/lib/update.sh`)에 있으므로, 이후 저장소가 침해돼도 로컬에 고정된 키로 서명이 여전히 검증되어 위조 manifest를 걸러냅니다. 즉 manifest 서명은 "설치 이후 공급망 침해"에는 유효하지만, "최초 설치 시점의 저장소 침해"에는 저장소 자체가 유일한 신뢰점이라는 근본적 한계가 있습니다. 이 한계를 실제로 없애는 건 [위의 "검증된 설치"](#검증된-설치-권장) 섹션의 GitHub Artifact Attestation(Sigstore transparency log 기반, 신뢰 기준이 저장소가 아니라 GitHub Actions OIDC 발급자)이고, 그걸 쓰기 번거로우면 최소한의 out-of-band 검증 수단으로 공개키의 SHA-256 fingerprint를 아래에 고정 게시합니다. `install.sh`도 실행 시점에 이 값을 출력하니, 설치 전 이 문서의 값과 반드시 대조하십시오.
 
 ```
 MANIFEST_PUBLIC_KEY fingerprint (SHA-256):
