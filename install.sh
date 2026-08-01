@@ -39,7 +39,7 @@ CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
 """
 
 VERSION = "3.8.1"
-REPOSITORY = "https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script"
+REPOSITORY = "https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
 ALLOW_FILE = os.environ.get("UBS_INSTALL_ALLOW_FILE", "false") == "true"
@@ -253,6 +253,10 @@ def main() -> None:
     kind = project_type()
     print(f"Universal Build Script {VERSION} transactional installer ({kind})")
     print(f"source: {BASE_URL}")
+
+    key_fingerprint = hashlib.sha256(MANIFEST_PUBLIC_KEY_PEM.encode("utf-8")).hexdigest()
+    print(f"manifest public key fingerprint (SHA-256): {key_fingerprint}")
+    print("compare this against the value published in README.md before trusting this install")
 
     manifest_bytes = fetch("scripts/update-manifest.txt")
     verify_manifest_signature(manifest_bytes, fetch("scripts/update-manifest.txt.sig"))
