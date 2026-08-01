@@ -9,7 +9,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
 ![Python](https://img.shields.io/badge/Python-3-3776AB?style=for-the-badge&logo=python&logoColor=white)
-[![Validate](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml/badge.svg)](https://github.com/kimdzhekhon/Universal-Build-Script/actions/workflows/validate.yml)
+[![Validate](https://github.com/Loop-Suite/Universal-Build-Script/actions/workflows/validate.yml/badge.svg)](https://github.com/Loop-Suite/Universal-Build-Script/actions/workflows/validate.yml)
 
 ![Flutter](https://img.shields.io/badge/Flutter-AAB%20%7C%20APK%20%7C%20IPA%20%7C%20Web-54C5F8?style=flat-square&logo=flutter)
 ![Tauri](https://img.shields.io/badge/Tauri-Windows%20%7C%20macOS%20%7C%20Linux-FFC131?style=flat-square&logo=tauri)
@@ -57,13 +57,13 @@ Universal Build Script는 현재 디렉터리가 단일 프로젝트인지 모�
 빌드하려는 단일 프로젝트 루트 또는 모노레포 루트에서 실행합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh | bash
 ```
 
 Python 3.9 이상은 필수입니다. Rust helper는 선택 사항이며 Cargo가 설치된 환경에서 다음처럼 함께 빌드할 수 있습니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh \
   | UBS_BUILD_RUST_HELPER=true bash
 
 # 이미 설치한 저장소에서는
@@ -73,13 +73,13 @@ curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/
 설치 프로그램은 모노레포에서도 사용할 수 있도록 모든 어댑터를 함께 설치합니다. 기존 UBS 파일은 기본적으로 보존됩니다. 기존 파일까지 갱신하려면 다음처럼 실행합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh \
   | UBS_FORCE=true bash
 ```
 
 > **2.x에서 3.x로 올릴 때:** 2.x updater는 Python/Rust 관리 파일을 받을 수 없으므로 위 `UBS_FORCE=true` 설치 명령을 한 번 사용해야 합니다. 3.x 설치가 끝난 뒤에는 `./build.sh update`가 전체 25개 관리 파일을 갱신합니다.
 
-설치기는 기본적으로 `v3.7.0` release ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
+설치기는 기본적으로 install.sh에 고정된 최신 릴리스(현재 `v3.8.1`) ref의 manifest와 25개 파일을 모두 staging·검증한 뒤 한 트랜잭션으로 적용합니다. 다른 불변 ref를 검증할 때만 `UBS_INSTALL_REF`를 지정하십시오.
 
 설치기는 기본적으로 대상 `.gitignore`에 `.ubs`, 환경파일, 서명 자료를 보호하는 멱등 블록을 추가합니다. 저장소 정책상 직접 관리해야 한다면 `UBS_MANAGE_GITIGNORE=false`를 명시할 수 있습니다.
 
@@ -474,13 +474,20 @@ HTTPS manifest 다운로드
 처음 설치된 구버전에 `update` 명령이 없다면 설치기를 한 번 갱신해야 합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh \
   | UBS_FORCE=true bash
 ```
 
 백업은 자동 삭제하지 않습니다. `.ubs/`를 프로젝트 `.gitignore`에 추가하고 `./build.sh update --prune-backups 30`처럼 명시적으로 보존기간을 적용하십시오.
 
 manifest는 ECDSA(P-256/SHA-256) 서명으로 보호됩니다 — `install.sh`/`scripts/lib/update.sh`에 박힌 공개키로 `scripts/update-manifest.txt.sig`를 검증하고, 서명이 없거나 다른 키로 만들어졌으면 체크섬이 다 맞아도 설치·업데이트를 거부합니다. manifest와 payload가 같은 HTTPS 호스트에서 오므로, 서명이 없으면 그 호스트/레포 자체가 침해됐을 때 위조된 조합이 체크섬 검증만으로는 걸러지지 않기 때문입니다. 서명 개인키는 이 레포에 없고 릴리스 담당자 로컬 머신에만 둡니다(GitHub Actions secret으로 두면 계정/레포 탈취 시 같이 털려 방어 목적이 무의미해집니다).
+
+**최초 설치와 이후 업데이트의 신뢰 루트는 다릅니다.** `curl | bash`로 하는 최초 설치는 installer(`install.sh`)·공개키·manifest·payload가 전부 같은 GitHub 저장소 채널에서 옵니다 — 즉 최초 설치의 신뢰 루트는 이 저장소 자체이며, 저장소 계정이 침해되면 서명 검증 코드와 공개키까지 함께 위조될 수 있어 이 서명 검증이 막아주지 못합니다. 반면 **이미 설치된 버전**이 `./build.sh update`로 갱신될 때는 공개키가 로컬 디스크(설치 시점에 고정된 `install.sh`/`scripts/lib/update.sh`)에 있으므로, 이후 저장소가 침해돼도 로컬에 고정된 키로 서명이 여전히 검증되어 위조 manifest를 걸러냅니다. 즉 서명 검증은 "설치 이후 공급망 침해"에는 유효하지만, "최초 설치 시점의 저장소 침해"에는 저장소 자체가 유일한 신뢰점이라는 근본적 한계가 있습니다(TUF/Sigstore 같은 독립 transparency log나 별도 도메인 공개가 없는 한). 최소한의 out-of-band 검증 수단으로, 공개키의 SHA-256 fingerprint를 아래에 고정 게시합니다 — 대조 후 진행하십시오. (`install.sh`가 실행 시점에 이 값을 직접 출력하도록 하는 건 서명된 manifest 파일이라 release signing key로 재서명이 필요해 별도 후속 작업으로 미룹니다.)
+
+```
+MANIFEST_PUBLIC_KEY fingerprint (SHA-256):
+f71b8c4225cbacba754a20ce6658fb8f65bae22d4c1d8bd3d930026ced0f7d8b
+```
 
 관리 파일을 개발·배포할 때는 `VERSION`을 올리고 아래 순서로 manifest를 다시 생성·서명해야 합니다. CI가 manifest와 실제 파일 해시의 차이, 그리고 서명 유효성을 모두 차단합니다.
 

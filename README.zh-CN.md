@@ -29,7 +29,7 @@
 ## 快速开始
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh | bash
 
 ./build.sh detect
 ./build.sh audit

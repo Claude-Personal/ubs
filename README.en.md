@@ -31,13 +31,13 @@ In 3.3, Python infers Node workspace, Flutter path, Gradle composite, and explic
 Install into an application root or monorepo root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh | bash
 ```
 
 Python 3.9 or newer is required. Rust is optional:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kimdzhekhon/Universal-Build-Script/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/main/install.sh \
   | UBS_BUILD_RUST_HELPER=true bash
 
 ./scripts/build-rust-helper.sh
