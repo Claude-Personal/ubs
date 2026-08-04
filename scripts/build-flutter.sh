@@ -16,13 +16,16 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/i18n.sh"
+
 # ==========================================
 # 빌드 스크립트 자체 업데이트 확인
 # ==========================================
 
 check_script_update() {
   [ "${UBS_ALLOW_SELF_UPDATE:-false}" = "true" ] || return 0
-  echo -e "${YELLOW}UBS_ALLOW_SELF_UPDATE는 폐기됐습니다. 검증된 중앙 명령을 사용하세요: ./build.sh update${NC}" >&2
+  echo -e "${YELLOW}$(ubs_msg SELF_UPDATE_DEPRECATED)${NC}" >&2
 }
 
 check_script_update "$@"
@@ -56,12 +59,12 @@ set_pubspec_version() {
 restore_version_if_incomplete() {
   if [ "$VERSION_CHANGED" = true ] && [ "$BUILD_COMPLETED" != true ]; then
     set_pubspec_version "$CURRENT_VERSION"
-    echo -e "${YELLOW}↩️  빌드가 완료되지 않아 버전을 $CURRENT_VERSION 으로 복원했습니다.${NC}" >&2
+    echo -e "${YELLOW}↩️  $(ubs_msg VERSION_RESTORE_ON_FAIL "$CURRENT_VERSION")${NC}" >&2
   fi
 }
 trap restore_version_if_incomplete EXIT
 
-echo -e "${CYAN}📦 현재 버전: $CURRENT_VERSION${NC}"
+echo -e "${CYAN}📦 $(ubs_msg CURRENT_VERSION_LABEL "$CURRENT_VERSION")${NC}"
 if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
   case "${UBS_VERSION_BUMP:-none}" in
     build) VERSION_CHOICE=1 ;;
@@ -69,18 +72,22 @@ if [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
     minor) VERSION_CHOICE=3 ;;
     major) VERSION_CHOICE=4 ;;
     none) VERSION_CHOICE=5 ;;
-    *) echo -e "${RED}지원하지 않는 UBS_VERSION_BUMP 값입니다.${NC}" >&2; exit 2 ;;
+    *) echo -e "${RED}$(ubs_msg UNSUPPORTED_VERSION_BUMP)${NC}" >&2; exit 2 ;;
   esac
-  echo -e "${CYAN}비대화형 버전 정책: ${UBS_VERSION_BUMP:-none}${NC}"
+  echo -e "${CYAN}$(ubs_msg NONINTERACTIVE_VERSION_POLICY "${UBS_VERSION_BUMP:-none}")${NC}"
 else
-  echo -e "${CYAN}어떤 버전을 올릴까요?${NC}"
-  echo -e "  ${YELLOW}1) Build Number만 올리기${NC}  → $VERSION_NAME+$((BUILD_NUMBER + 1))"
-  echo -e "  ${YELLOW}2) Patch 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')+$((BUILD_NUMBER + 1))"
-  echo -e "  ${YELLOW}3) Minor 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')+$((BUILD_NUMBER + 1))"
-  echo -e "  ${YELLOW}4) Major 버전 올리기${NC}      → $(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')+$((BUILD_NUMBER + 1))"
-  echo -e "  ${YELLOW}5) 버전 유지${NC}"
-  echo -e "  ${YELLOW}6) 취소${NC}"
-  read -p "선택 (1-6): " VERSION_CHOICE
+  echo -e "${CYAN}$(ubs_msg MENU_VERSION_PROMPT)${NC}"
+  NEXT_BUILD="$VERSION_NAME+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_BUILD_NUMBER_BUMP)${NC}  → ${NEXT_BUILD}"
+  NEXT_PATCH="$(echo $VERSION_NAME | awk -F. '{print $1"."$2"."$3+1}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PATCH_BUMP)${NC}      → ${NEXT_PATCH}"
+  NEXT_MINOR="$(echo $VERSION_NAME | awk -F. '{print $1"."$2+1".0"}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_MINOR_BUMP)${NC}      → ${NEXT_MINOR}"
+  NEXT_MAJOR="$(echo $VERSION_NAME | awk -F. '{print $1+1".0.0"}')+$((BUILD_NUMBER + 1))"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_MAJOR_BUMP)${NC}      → ${NEXT_MAJOR}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_VERSION_KEEP)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_CANCEL_VERSION)${NC}"
+  read -p "$(ubs_msg CHOICE_PROMPT_1_6)" VERSION_CHOICE
 fi
 
 case $VERSION_CHOICE in
@@ -101,14 +108,14 @@ case $VERSION_CHOICE in
     ;;
   5)
     NEW_VERSION="$CURRENT_VERSION"
-    echo -e "${CYAN}버전 유지: $NEW_VERSION${NC}"
+    echo -e "${CYAN}$(ubs_msg VERSION_KEEP_LABEL "$NEW_VERSION")${NC}"
     ;;
   6)
-    echo -e "${YELLOW}빌드를 취소했습니다.${NC}"
+    echo -e "${YELLOW}$(ubs_msg BUILD_CANCELLED)${NC}"
     exit 0
     ;;
   *)
-    echo -e "${RED}잘못된 선택입니다. 버전을 유지합니다.${NC}"
+    echo -e "${RED}$(ubs_msg INVALID_CHOICE_KEEP_VERSION)${NC}"
     NEW_VERSION="$CURRENT_VERSION"
     ;;
 esac
@@ -117,7 +124,7 @@ esac
 if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
   set_pubspec_version "$NEW_VERSION"
   VERSION_CHANGED=true
-  echo -e "${GREEN}✅ 버전 업데이트: $CURRENT_VERSION → $NEW_VERSION${NC}"
+  echo -e "${GREEN}✅ $(ubs_msg VERSION_UPDATED "$CURRENT_VERSION" "$NEW_VERSION")${NC}"
 fi
 
 # ==========================================
@@ -133,7 +140,7 @@ CUSTOM_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
 
 if [ "$CUSTOM_OUTPUTS" != "auto" ]; then
   if ! printf '%s\n' "$CUSTOM_OUTPUTS" | grep -Eqs '^(appbundle|apk|ipa|web)(,(appbundle|apk|ipa|web))*$'; then
-    echo -e "${RED}지원하지 않는 UBS_FLUTTER_OUTPUTS 값입니다: $CUSTOM_OUTPUTS${NC}" >&2
+    echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_OUTPUTS "$CUSTOM_OUTPUTS")${NC}" >&2
     exit 2
   fi
   OLD_IFS="$IFS"
@@ -144,11 +151,11 @@ if [ "$CUSTOM_OUTPUTS" != "auto" ]; then
       apk) BUILD_APK=true ;;
       ipa) BUILD_IOS=true ;;
       web) BUILD_WEB=true ;;
-      *) echo -e "${RED}지원하지 않는 UBS_FLUTTER_OUTPUTS 값입니다: $output${NC}" >&2; exit 2 ;;
+      *) echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_OUTPUTS "$output")${NC}" >&2; exit 2 ;;
     esac
   done
   IFS="$OLD_IFS"
-  echo -e "${CYAN}Flutter 출력 지정: $CUSTOM_OUTPUTS${NC}"
+  echo -e "${CYAN}$(ubs_msg FLUTTER_OUTPUTS_SPECIFIED "$CUSTOM_OUTPUTS")${NC}"
 elif [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
   case "${UBS_FLUTTER_PLATFORM:-auto}" in
     auto)
@@ -159,16 +166,16 @@ elif [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
     all) PLATFORM_CHOICE=1 ;;
     ios) PLATFORM_CHOICE=2 ;;
     android) PLATFORM_CHOICE=3 ;;
-    *) echo -e "${RED}지원하지 않는 UBS_FLUTTER_PLATFORM 값입니다.${NC}" >&2; exit 2 ;;
+    *) echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_PLATFORM)${NC}" >&2; exit 2 ;;
   esac
-  echo -e "${CYAN}비대화형 Flutter 플랫폼: ${UBS_FLUTTER_PLATFORM:-auto}${NC}"
+  echo -e "${CYAN}$(ubs_msg NONINTERACTIVE_FLUTTER_PLATFORM "${UBS_FLUTTER_PLATFORM:-auto}")${NC}"
 else
-  echo -e "${CYAN}🎯 어떤 플랫폼을 빌드할까요?${NC}"
-  echo -e "  ${YELLOW}1) iOS + Android 둘 다${NC}"
-  echo -e "  ${YELLOW}2) iOS만${NC}"
-  echo -e "  ${YELLOW}3) Android만${NC}"
-  echo -e "  ${YELLOW}4) 취소${NC}"
-  read -p "선택 (1-4): " PLATFORM_CHOICE
+  echo -e "${CYAN}🎯 $(ubs_msg MENU_PLATFORM_PROMPT)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_BOTH)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_IOS)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_ANDROID)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_CANCEL_PLATFORM)${NC}"
+  read -p "$(ubs_msg CHOICE_PROMPT_1_4)" PLATFORM_CHOICE
 fi
 
 if [ "$CUSTOM_OUTPUTS" = "auto" ]; then
@@ -176,24 +183,24 @@ case $PLATFORM_CHOICE in
   1)
     BUILD_IOS=true
     BUILD_ANDROID=true
-    echo -e "${GREEN}✅ iOS + Android 빌드${NC}"
+    echo -e "${GREEN}✅ $(ubs_msg PLATFORM_SELECTED_BOTH)${NC}"
     ;;
   2)
     BUILD_IOS=true
     BUILD_ANDROID=false
-    echo -e "${GREEN}✅ iOS만 빌드${NC}"
+    echo -e "${GREEN}✅ $(ubs_msg PLATFORM_SELECTED_IOS)${NC}"
     ;;
   3)
     BUILD_IOS=false
     BUILD_ANDROID=true
-    echo -e "${GREEN}✅ Android만 빌드${NC}"
+    echo -e "${GREEN}✅ $(ubs_msg PLATFORM_SELECTED_ANDROID)${NC}"
     ;;
   4)
-    echo -e "${YELLOW}빌드를 취소했습니다.${NC}"
+    echo -e "${YELLOW}$(ubs_msg BUILD_CANCELLED)${NC}"
     exit 0
     ;;
   *)
-    echo -e "${RED}잘못된 선택입니다. iOS + Android 둘 다 빌드합니다.${NC}"
+    echo -e "${RED}$(ubs_msg INVALID_CHOICE_BOTH)${NC}"
     BUILD_IOS=true
     BUILD_ANDROID=true
     ;;
@@ -201,7 +208,6 @@ esac
 fi
 
 PARALLEL_BUILD=false
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARALLEL_PREFS_FILE="$SCRIPT_DIR/.build_prefs"
 
 if [ "$BUILD_IOS" = true ] && [ "$BUILD_ANDROID" = true ] && \
@@ -209,24 +215,24 @@ if [ "$BUILD_IOS" = true ] && [ "$BUILD_ANDROID" = true ] && \
   if [ -f "$PARALLEL_PREFS_FILE" ]; then
     source "$PARALLEL_PREFS_FILE"
     if [ "$PARALLEL_BUILD" = true ]; then
-      echo -e "${CYAN}저장된 설정: 동시 빌드 사용${NC} (변경하려면 ${SCRIPT_DIR}/.build_prefs 삭제)"
+      echo -e "${CYAN}$(ubs_msg PARALLEL_PREF_SAVED_PARALLEL)${NC} $(ubs_msg PARALLEL_PREF_CHANGE_HINT "$PARALLEL_PREFS_FILE")"
     else
-      echo -e "${CYAN}저장된 설정: 순차 빌드 사용${NC} (변경하려면 ${SCRIPT_DIR}/.build_prefs 삭제)"
+      echo -e "${CYAN}$(ubs_msg PARALLEL_PREF_SAVED_SEQUENTIAL)${NC} $(ubs_msg PARALLEL_PREF_CHANGE_HINT "$PARALLEL_PREFS_FILE")"
     fi
   else
-    echo -e "${CYAN}iOS·Android 빌드 방식을 선택하세요.${NC}"
-    echo -e "  ${YELLOW}1) 순차 빌드 (권장)${NC}"
-    echo -e "  ${YELLOW}2) 동시 빌드${NC} (Gradle+Xcode 동시 실행 → 메모리 여유 없으면 오히려 느려질 수 있음)"
-    read -p "선택 (1-2): " PARALLEL_CHOICE
+    echo -e "${CYAN}$(ubs_msg PARALLEL_CHOICE_PROMPT)${NC}"
+    echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_SEQUENTIAL)${NC}"
+    echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_CONCURRENT)${NC} $(ubs_msg MENU_OPT_CONCURRENT_WARNING)"
+    read -p "$(ubs_msg CHOICE_PROMPT_1_2)" PARALLEL_CHOICE
     if [ "$PARALLEL_CHOICE" = "2" ]; then
       PARALLEL_BUILD=true
-      echo -e "${GREEN}✅ 동시 빌드로 진행${NC}"
+      echo -e "${GREEN}✅ $(ubs_msg PARALLEL_CHOSEN_CONCURRENT)${NC}"
     else
       PARALLEL_BUILD=false
-      echo -e "${GREEN}✅ 순차 빌드로 진행${NC}"
+      echo -e "${GREEN}✅ $(ubs_msg PARALLEL_CHOSEN_SEQUENTIAL)${NC}"
     fi
     echo "PARALLEL_BUILD=$PARALLEL_BUILD" > "$PARALLEL_PREFS_FILE"
-    echo -e "${CYAN}ℹ️  이 선택은 저장되어 다음부터 자동 적용됩니다. 바꾸려면 ${PARALLEL_PREFS_FILE} 을 삭제하세요.${NC}"
+    echo -e "${CYAN}ℹ️  $(ubs_msg PARALLEL_PREF_SAVE_NOTICE "$PARALLEL_PREFS_FILE")${NC}"
   fi
 fi
 
@@ -242,9 +248,9 @@ fi
 if [ ! -f "$ENV_FILE" ]; then
   ENV_FILE=""
   DART_DEFINE=""
-  echo -e "${CYAN}ℹ️  .env 파일 없음 — dart-define 없이 빌드합니다.${NC}"
+  echo -e "${CYAN}ℹ️  $(ubs_msg ENV_FILE_MISSING)${NC}"
 else
-  echo -e "${CYAN}🔑 환경변수: $ENV_FILE${NC}"
+  echo -e "${CYAN}🔑 $(ubs_msg ENV_FILE_LABEL "$ENV_FILE")${NC}"
   DART_DEFINE="--dart-define-from-file=$ENV_FILE"
 fi
 ANDROID_OUT="build/app/outputs/bundle/release"
@@ -258,11 +264,11 @@ WEB_OUT="build/web"
 
 BUILD_START_TS=$(date +%s)
 
-echo -e "${BLUE}🚀 [1/4] Cleaning & Fetching Dependencies...${NC}"
+echo -e "${BLUE}🚀 [1/4] $(ubs_msg STEP_CLEAN_FETCH)${NC}"
 if [ "${UBS_SKIP_CLEAN:-false}" != "true" ]; then
   flutter clean
 else
-  echo -e "${CYAN}ℹ️  UBS_SKIP_CLEAN=true — 기존 빌드 캐시를 유지합니다.${NC}"
+  echo -e "${CYAN}ℹ️  $(ubs_msg SKIP_CLEAN_NOTICE)${NC}"
 fi
 flutter pub get
 
@@ -271,7 +277,7 @@ flutter pub get
 # dart run build_runner build --delete-conflicting-outputs
 
 build_android() {
-  echo -e "${YELLOW}🛡️ [3/4] Building Android App Bundle (Optimized)...${NC}"
+  echo -e "${YELLOW}🛡️ [3/4] $(ubs_msg STEP_BUILD_ANDROID)${NC}"
   flutter build appbundle --release \
     $DART_DEFINE \
     --obfuscate \
@@ -281,7 +287,7 @@ build_android() {
 }
 
 build_apk() {
-  echo -e "${YELLOW}🤖 Building Android APKs (Optimized, split per ABI)...${NC}"
+  echo -e "${YELLOW}🤖 $(ubs_msg STEP_BUILD_APK)${NC}"
   flutter build apk --release \
     $DART_DEFINE \
     --obfuscate \
@@ -295,13 +301,13 @@ build_ios() {
   local export_options="${UBS_IOS_EXPORT_OPTIONS:-ios/ExportOptions.plist}"
   if [ ! -f "$export_options" ] && [ -f "${UBS_RUNTIME_ROOT:-}/templates/flutter/ExportOptions.plist" ]; then
     export_options="${UBS_RUNTIME_ROOT}/templates/flutter/ExportOptions.plist"
-    echo -e "${CYAN}ℹ️  앱 전용 ExportOptions가 없어 UBS 일반 App Store 템플릿을 사용합니다.${NC}"
+    echo -e "${CYAN}ℹ️  $(ubs_msg EXPORT_OPTIONS_FALLBACK)${NC}"
   fi
   [ -f "$export_options" ] || {
-    echo -e "${RED}❌ iOS 내보내기 설정을 찾을 수 없습니다: $export_options${NC}" >&2
+    echo -e "${RED}❌ $(ubs_msg EXPORT_OPTIONS_NOT_FOUND "$export_options")${NC}" >&2
     return 1
   }
-  echo -e "${YELLOW}🍎 [4/4] Building iOS IPA (Archive + Export)...${NC}"
+  echo -e "${YELLOW}🍎 [4/4] $(ubs_msg STEP_BUILD_IOS)${NC}"
   # flutter build ipa: --dart-define 값을 포함하여 Archive까지 Flutter CLI가 직접 처리.
   # Xcode에서 수동 Archive 시 --dart-define이 전달되지 않으므로
   # String.fromEnvironment() 값이 모두 빈 문자열이 되어 흰 화면 버그가 발생함.
@@ -315,7 +321,7 @@ build_ios() {
 }
 
 build_web() {
-  echo -e "${YELLOW}🌐 Building Flutter Web (Optimized)...${NC}"
+  echo -e "${YELLOW}🌐 $(ubs_msg STEP_BUILD_WEB)${NC}"
   flutter build web --release \
     $DART_DEFINE \
     --tree-shake-icons \
@@ -323,7 +329,7 @@ build_web() {
 }
 
 if [ "$PARALLEL_BUILD" = true ] && [ "$BUILD_ANDROID" = true ] && [ "$BUILD_IOS" = true ]; then
-  echo -e "${BLUE}⏱️  Android·iOS 동시 빌드 시작 (로그가 섞여 보일 수 있음)${NC}"
+  echo -e "${BLUE}⏱️  $(ubs_msg PARALLEL_BUILD_START)${NC}"
   build_android &
   ANDROID_PID=$!
   build_ios &
@@ -333,7 +339,7 @@ if [ "$PARALLEL_BUILD" = true ] && [ "$BUILD_ANDROID" = true ] && [ "$BUILD_IOS"
   if wait "$IOS_PID"; then IOS_STATUS=0; else IOS_STATUS=$?; fi
 
   if [ "$ANDROID_STATUS" -ne 0 ] || [ "$IOS_STATUS" -ne 0 ]; then
-    echo -e "${RED}❌ 동시 빌드 실패 (Android: $ANDROID_STATUS, iOS: $IOS_STATUS)${NC}"
+    echo -e "${RED}❌ $(ubs_msg PARALLEL_BUILD_FAILED "$ANDROID_STATUS" "$IOS_STATUS")${NC}"
     exit 1
   fi
 else
@@ -374,23 +380,24 @@ BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
   afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
   say "Build process completed successfully" 2>/dev/null || true
-  osascript -e "display notification \"Version $NEW_VERSION 빌드 완료 ($BUILD_ELAPSED_FMT)\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\"" 2>/dev/null || true
+  osascript -e "display notification \"$(ubs_msg NOTIFY_BUILD_DONE "$NEW_VERSION" "$BUILD_ELAPSED_FMT")\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\"" 2>/dev/null || true
 fi
 
 echo -e "------------------------------------------------------------"
-echo -e "${GREEN}✅ BUILD COMPLETED SUCCESSFULLY!${NC}"
-echo -e "🏷️  Version    : $NEW_VERSION"
+echo -e "${GREEN}✅ $(ubs_msg BUILD_SUCCESS)${NC}"
+echo -e "🏷️  $(ubs_msg BUILD_SUMMARY_VERSION "$NEW_VERSION")"
 if [ "$BUILD_ANDROID" = true ]; then
-  echo -e "📍 Android AAB : $ANDROID_OUT/app-release.aab"
+  echo -e "📍 $(ubs_msg BUILD_SUMMARY_ANDROID_AAB "$ANDROID_OUT/app-release.aab")"
 fi
 if [ "$BUILD_IOS" = true ]; then
-  echo -e "📍 iOS IPA     : $IOS_OUT/Runner.ipa"
+  echo -e "📍 $(ubs_msg BUILD_SUMMARY_IOS_IPA "$IOS_OUT/Runner.ipa")"
 fi
 if [ "$BUILD_APK" = true ]; then
-  echo -e "📍 Android APK : $APK_OUT/ (ABI별 APK)"
+  echo -e "📍 $(ubs_msg BUILD_SUMMARY_ANDROID_APK "$APK_OUT")"
 fi
 if [ "$BUILD_WEB" = true ]; then
-  echo -e "📍 Flutter Web : $WEB_OUT/"
+  echo -e "📍 $(ubs_msg BUILD_SUMMARY_FLUTTER_WEB "$WEB_OUT")"
 fi
-echo -e "⏱️  빌드 시간   : $BUILD_ELAPSED_FMT ($([ "$PARALLEL_BUILD" = true ] && echo 동시 || echo 순차) 빌드)"
+if [ "$PARALLEL_BUILD" = true ]; then BUILD_MODE_LABEL="$(ubs_msg BUILD_MODE_PARALLEL)"; else BUILD_MODE_LABEL="$(ubs_msg BUILD_MODE_SEQUENTIAL)"; fi
+echo -e "⏱️  $(ubs_msg BUILD_SUMMARY_ELAPSED "$BUILD_ELAPSED_FMT" "$BUILD_MODE_LABEL")"
 echo -e "------------------------------------------------------------"

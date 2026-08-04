@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+_UPDATE_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_UPDATE_SH_DIR/i18n.sh"
+
 # Universal Build Script의 제한된 런타임 번들을 안전하게 갱신한다.
 # 원격 manifest는 서명 검증(아래 UBS_UPDATE_MANIFEST_PUBLIC_KEY)으로 무결성을
 # 보장한다 — manifest와 payload가 같은 HTTPS 호스트에서 오므로, 서명이 없으면
@@ -25,14 +28,14 @@ CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
 ubs_update_verify_manifest_signature() {
   local manifest="$1" signature="$2" pubkey_file
   command -v openssl >/dev/null 2>&1 || {
-    echo "manifest 서명 검증에는 openssl이 필요합니다." >&2
+    echo "$(ubs_msg UPDATE_OPENSSL_REQUIRED)" >&2
     return 1
   }
   pubkey_file="$(mktemp "${TMPDIR:-/tmp}/ubs-update-pubkey.XXXXXX")" || return 1
   printf '%s\n' "$UBS_UPDATE_MANIFEST_PUBLIC_KEY" > "$pubkey_file"
   if ! openssl dgst -sha256 -verify "$pubkey_file" -signature "$signature" "$manifest" >/dev/null 2>&1; then
     rm -f "$pubkey_file"
-    echo "manifest 서명 검증 실패 — 다운로드 채널이 침해됐을 수 있습니다." >&2
+    echo "$(ubs_msg UPDATE_SIGNATURE_INVALID)" >&2
     return 1
   fi
   rm -f "$pubkey_file"
@@ -46,6 +49,8 @@ ubs_update_allowed_path() {
     scripts/build-flutter.sh|scripts/build-tauri.sh|scripts/build-tauri-macos.sh|scripts/build-gradle.sh|\
     scripts/build-node.sh|scripts/lib/detect.sh|scripts/lib/audit.sh|\
     scripts/lib/node-package-manager.sh|scripts/lib/update.sh|\
+    scripts/lib/i18n.sh|scripts/lib/i18n_messages.sh|\
+    scripts/i18n.py|scripts/i18n_messages.py|\
     skills/universal-build/SKILL.md|skills/universal-build/agents/openai.yaml|\
     skills/universal-build/references/optimization.md|templates/flutter/ExportOptions.plist) return 0 ;;
     *) return 1 ;;
@@ -75,6 +80,10 @@ scripts/lib/detect.sh
 scripts/lib/audit.sh
 scripts/lib/node-package-manager.sh
 scripts/lib/update.sh
+scripts/lib/i18n.sh
+scripts/lib/i18n_messages.sh
+scripts/i18n.py
+scripts/i18n_messages.py
 skills/universal-build/SKILL.md
 skills/universal-build/agents/openai.yaml
 skills/universal-build/references/optimization.md
@@ -86,9 +95,9 @@ ubs_update_prune_backups() {
   local root="$1" days="$2" json="${3:-false}" backups
   local count=0 backup_path
   backups="$root/.ubs/backups"
-  printf '%s' "$days" | grep -Eqs '^[0-9]+$' || { echo "보존 일수는 0 이상의 정수여야 합니다: $days" >&2; return 2; }
+  printf '%s' "$days" | grep -Eqs '^[0-9]+$' || { echo "$(ubs_msg UPDATE_RETENTION_DAYS_INVALID "$days")" >&2; return 2; }
   if [ -L "$root/.ubs" ] || [ -L "$backups" ]; then
-    echo "심볼릭 링크 백업 경로는 정리하지 않습니다: $backups" >&2
+    echo "$(ubs_msg UPDATE_BACKUP_SYMLINK_SKIP "$backups")" >&2
     return 1
   fi
   if [ -d "$backups" ]; then
@@ -101,7 +110,7 @@ ubs_update_prune_backups() {
   if [ "$json" = true ]; then
     printf '{"ok":true,"mode":"prune-backups","retention_days":%s,"deleted":%s}\n' "$days" "$count"
   else
-    echo "백업 정리 완료: ${days}일 초과 디렉터리 ${count}개 삭제"
+    echo "$(ubs_msg UPDATE_BACKUP_PRUNED "$days" "$count")"
   fi
 }
 
@@ -113,7 +122,7 @@ ubs_update_sha256() {
   elif command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
   else
-    echo "SHA-256 도구(sha256sum 또는 shasum)가 필요합니다." >&2
+    echo "$(ubs_msg UPDATE_SHA256_TOOL_REQUIRED)" >&2
     return 1
   fi
 }
@@ -158,7 +167,7 @@ ubs_update_safe_destination() {
     current="$current/$component"
     if [ -L "$current" ]; then
       IFS="$old_ifs"
-      echo "심볼릭 링크 경로는 업데이트하지 않습니다: $relative" >&2
+      echo "$(ubs_msg UPDATE_PATH_SYMLINK_SKIP "$relative")" >&2
       return 1
     fi
   done
@@ -172,17 +181,17 @@ ubs_update_restore() {
   for relative in "$@"; do
     destination="$root/$relative"
     if [ -e "$backup/$relative" ]; then
-      mkdir -p "$(dirname "$destination")" || { echo "복원 경로 생성 실패: $relative" >&2; continue; }
+      mkdir -p "$(dirname "$destination")" || { echo "$(ubs_msg UPDATE_RESTORE_DIR_FAILED "$relative")" >&2; continue; }
       restore_tmp="$(mktemp "$destination.ubs-restore.XXXXXX")" || {
-        echo "복원 임시 파일 생성 실패: $relative" >&2
+        echo "$(ubs_msg UPDATE_RESTORE_TEMP_FAILED "$relative")" >&2
         continue
       }
       if ! cp -p "$backup/$relative" "$restore_tmp" || ! mv -f "$restore_tmp" "$destination"; then
-        echo "복원 실패: $relative" >&2
+        echo "$(ubs_msg UPDATE_RESTORE_FAILED "$relative")" >&2
         rm -f "$restore_tmp" || true
       fi
     else
-      rm -f "$destination" || echo "새 파일 제거 실패: $relative" >&2
+      rm -f "$destination" || echo "$(ubs_msg UPDATE_NEW_FILE_REMOVE_FAILED "$relative")" >&2
     fi
   done
 }
@@ -195,7 +204,7 @@ ubs_run_update() {
   local rust_batch=false rust_source_changed=false
   local -a paths hashes changed_paths installed_paths
 
-  command -v curl >/dev/null 2>&1 || { echo "업데이트에는 curl이 필요합니다." >&2; return 1; }
+  command -v curl >/dev/null 2>&1 || { echo "$(ubs_msg UPDATE_CURL_REQUIRED)" >&2; return 1; }
 
   base_url="${UBS_UPDATE_BASE_URL:-$UBS_UPDATE_DEFAULT_BASE_URL}"
   base_url="${base_url%/}"
@@ -203,24 +212,24 @@ ubs_run_update() {
     https://*) ;;
     file://*)
       [ "${UBS_UPDATE_ALLOW_FILE:-false}" = "true" ] || {
-        echo "file:// 업데이트는 테스트 모드에서만 허용됩니다." >&2
+        echo "$(ubs_msg UPDATE_FILE_SCHEME_TEST_ONLY)" >&2
         return 1
       }
       ;;
-    *) echo "업데이트 URL은 HTTPS만 허용됩니다: $base_url" >&2; return 1 ;;
+    *) echo "$(ubs_msg UPDATE_URL_HTTPS_REQUIRED "$base_url")" >&2; return 1 ;;
   esac
 
   temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/ubs-update.XXXXXX")" || return 1
   manifest="$temp_dir/update-manifest.txt"
   manifest_url="$base_url/scripts/update-manifest.txt"
   if ! ubs_update_fetch "$manifest_url" "$manifest"; then
-    echo "업데이트 manifest를 가져오지 못했습니다: $manifest_url" >&2
+    echo "$(ubs_msg UPDATE_MANIFEST_FETCH_FAILED "$manifest_url")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
   manifest_sig="$temp_dir/update-manifest.txt.sig"
   if ! ubs_update_fetch "$manifest_url.sig" "$manifest_sig"; then
-    echo "manifest 서명 파일을 가져오지 못했습니다: $manifest_url.sig" >&2
+    echo "$(ubs_msg UPDATE_MANIFEST_SIG_FETCH_FAILED "$manifest_url.sig")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
@@ -235,7 +244,7 @@ ubs_run_update() {
       \#*) continue ;;
       version)
         if [ -n "$remote_version" ] || [ -z "$value" ] || [ -n "$relative" ]; then
-          echo "잘못된 version 항목입니다." >&2
+          echo "$(ubs_msg UPDATE_VERSION_ENTRY_INVALID)" >&2
           rm -rf "$temp_dir"
           return 1
         fi
@@ -245,13 +254,13 @@ ubs_run_update() {
         if ! printf '%s' "$value" | grep -Eqs '^[0-9a-f]{64}$' || \
            [ -z "$relative" ] || [ -n "$extra" ] || \
            ! ubs_update_allowed_path "$relative"; then
-          echo "허용되지 않거나 잘못된 manifest 항목입니다: $relative" >&2
+          echo "$(ubs_msg UPDATE_MANIFEST_ENTRY_INVALID "$relative")" >&2
           rm -rf "$temp_dir"
           return 1
         fi
         case " $seen " in
           *" $relative "*)
-            echo "중복된 manifest 경로입니다: $relative" >&2
+            echo "$(ubs_msg UPDATE_MANIFEST_PATH_DUPLICATE "$relative")" >&2
             rm -rf "$temp_dir"
             return 1
             ;;
@@ -261,7 +270,7 @@ ubs_run_update() {
         hashes+=("$value")
         ;;
       *)
-        echo "알 수 없는 manifest 항목입니다: $kind" >&2
+        echo "$(ubs_msg UPDATE_MANIFEST_ENTRY_UNKNOWN "$kind")" >&2
         rm -rf "$temp_dir"
         return 1
         ;;
@@ -269,7 +278,7 @@ ubs_run_update() {
   done < "$manifest"
 
   if ! printf '%s' "$remote_version" | grep -Eqs '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "manifest version은 숫자 SemVer 형식이어야 합니다: $remote_version" >&2
+    echo "$(ubs_msg UPDATE_MANIFEST_VERSION_FORMAT "$remote_version")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
@@ -281,7 +290,7 @@ ubs_run_update() {
   while IFS= read -r required; do
     case " $seen " in
       *" $required "*) ;;
-      *) echo "manifest 필수 경로가 누락됐습니다: $required" >&2; rm -rf "$temp_dir"; return 1 ;;
+      *) echo "$(ubs_msg UPDATE_MANIFEST_REQUIRED_PATH_MISSING "$required")" >&2; rm -rf "$temp_dir"; return 1 ;;
     esac
   done < <(ubs_update_required_paths)
 
@@ -290,8 +299,8 @@ ubs_run_update() {
   if printf '%s' "$local_version" | grep -Eqs '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     version_order="$(ubs_update_semver_compare "$remote_version" "$local_version")"
     if [ "$version_order" = "-1" ] && [ "${UBS_UPDATE_ALLOW_DOWNGRADE:-false}" != "true" ]; then
-      echo "다운그레이드를 차단했습니다: local=$local_version remote=$remote_version" >&2
-      echo "복원이 필요하면 .ubs/backups/를 사용하거나 UBS_UPDATE_ALLOW_DOWNGRADE=true를 명시하세요." >&2
+      echo "$(ubs_msg UPDATE_DOWNGRADE_BLOCKED "$local_version" "$remote_version")" >&2
+      echo "$(ubs_msg UPDATE_DOWNGRADE_HINT)" >&2
       rm -rf "$temp_dir"
       return 1
     fi
@@ -313,16 +322,16 @@ ubs_run_update() {
         [ -n "$relative" ] || continue
         case " ${paths[*]} " in
           *" $relative "*) ;;
-          *) echo "Rust helper가 manifest 밖 경로를 반환했습니다: $relative" >&2; rm -rf "$temp_dir"; return 1 ;;
+          *) echo "$(ubs_msg UPDATE_RUST_HELPER_PATH_OUTSIDE "$relative")" >&2; rm -rf "$temp_dir"; return 1 ;;
         esac
         case " ${changed_paths[*]} " in
-          *" $relative "*) echo "Rust helper가 중복 경로를 반환했습니다: $relative" >&2; rm -rf "$temp_dir"; return 1 ;;
+          *" $relative "*) echo "$(ubs_msg UPDATE_RUST_HELPER_PATH_DUPLICATE "$relative")" >&2; rm -rf "$temp_dir"; return 1 ;;
         esac
         changed_paths+=("$relative")
         changed_count=$((changed_count + 1))
       done < "$changed_file"
     else
-      echo "Rust helper가 batch manifest 명령을 지원하지 않아 portable hash fallback을 사용합니다." >&2
+      echo "$(ubs_msg UPDATE_RUST_HELPER_BATCH_UNSUPPORTED)" >&2
     fi
   fi
 
@@ -339,35 +348,35 @@ ubs_run_update() {
     done
   fi
 
-  echo "Universal Build Script: local=$local_version remote=$remote_version"
+  echo "$(ubs_msg UPDATE_VERSION_STATUS "$local_version" "$remote_version")"
   if [ "$changed_count" -eq 0 ]; then
-    echo "이미 최신 상태이며 관리 파일의 무결성도 일치합니다."
+    echo "$(ubs_msg UPDATE_UP_TO_DATE)"
     rm -rf "$temp_dir"
     return 0
   fi
 
-  echo "변경 대상: ${changed_count}개"
+  echo "$(ubs_msg UPDATE_CHANGED_COUNT "$changed_count")"
   printf '  - %s\n' "${changed_paths[@]}"
   if [ "$check_only" = true ]; then
-    echo "확인만 수행했습니다. 적용하려면: ./build.sh update"
+    echo "$(ubs_msg UPDATE_CHECK_ONLY_DONE)"
     rm -rf "$temp_dir"
     return 0
   fi
   if [ "$dry_run" = true ]; then
-    echo "dry-run이므로 다운로드·백업·교체하지 않았습니다."
+    echo "$(ubs_msg UPDATE_DRY_RUN_SKIPPED)"
     rm -rf "$temp_dir"
     return 0
   fi
 
   if [ -L "$root/.ubs" ] || [ -L "$root/.ubs/backups" ]; then
-    echo "심볼릭 링크 백업 경로는 사용하지 않습니다: $root/.ubs" >&2
+    echo "$(ubs_msg UPDATE_BACKUP_ROOT_SYMLINK_BLOCK "$root/.ubs")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
-  mkdir -p "$root/.ubs" || { echo "업데이트 상태 경로를 만들 수 없습니다." >&2; rm -rf "$temp_dir"; return 1; }
+  mkdir -p "$root/.ubs" || { echo "$(ubs_msg UPDATE_STATE_DIR_FAILED)" >&2; rm -rf "$temp_dir"; return 1; }
   lock_dir="$root/.ubs/update.lock"
   if ! mkdir "$lock_dir" 2>/dev/null; then
-    echo "다른 업데이트가 진행 중입니다: $lock_dir" >&2
+    echo "$(ubs_msg UPDATE_LOCK_HELD "$lock_dir")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
@@ -380,19 +389,19 @@ ubs_run_update() {
     expected="${hashes[$i]}"
     case " ${changed_paths[*]} " in *" $relative "*) ;; *) continue ;; esac
     if ! mkdir -p "$temp_dir/stage/$(dirname "$relative")"; then
-      echo "임시 경로 생성 실패: $relative" >&2
+      echo "$(ubs_msg UPDATE_STAGE_DIR_FAILED "$relative")" >&2
       rm -rf "$temp_dir"
       return 1
     fi
     if ! ubs_update_fetch "$payload_base_url/$relative" "$temp_dir/stage/$relative"; then
-      echo "파일 다운로드 실패: $relative" >&2
+      echo "$(ubs_msg UPDATE_FILE_DOWNLOAD_FAILED "$relative")" >&2
       rm -rf "$temp_dir"
       return 1
     fi
     if [ "$rust_batch" != true ]; then
       actual="$(ubs_update_sha256 "$temp_dir/stage/$relative")" || { rm -rf "$temp_dir"; return 1; }
       if [ "$actual" != "$expected" ]; then
-        echo "SHA-256 불일치: $relative" >&2
+        echo "$(ubs_msg UPDATE_SHA256_MISMATCH "$relative")" >&2
         rm -rf "$temp_dir"
         return 1
       fi
@@ -400,7 +409,7 @@ ubs_run_update() {
   done
   if [ "$rust_batch" = true ] && \
      ! "$UBS_RUST_HELPER" verify-manifest "$manifest" "$temp_dir/stage" "${changed_paths[@]}"; then
-    echo "Rust batch manifest 검증에 실패했습니다." >&2
+    echo "$(ubs_msg UPDATE_RUST_BATCH_VERIFY_FAILED)" >&2
     rm -rf "$temp_dir"
     return 1
   fi
@@ -408,20 +417,20 @@ ubs_run_update() {
   timestamp="$(date '+%Y%m%d-%H%M%S')-$$"
   backup_dir="$root/.ubs/backups/$timestamp"
   if ! mkdir -p "$backup_dir"; then
-    echo "백업 경로를 만들 수 없습니다: $backup_dir" >&2
+    echo "$(ubs_msg UPDATE_BACKUP_DIR_FAILED "$backup_dir")" >&2
     rm -rf "$temp_dir"
     return 1
   fi
   for relative in "${changed_paths[@]}"; do
     if ! ubs_update_safe_destination "$root" "$relative"; then
-      echo "백업 직전 경로 검증 실패: $relative" >&2
+      echo "$(ubs_msg UPDATE_BACKUP_PRECHECK_FAILED "$relative")" >&2
       rm -rf "$temp_dir"
       return 1
     fi
     if [ -e "$root/$relative" ]; then
       if ! mkdir -p "$backup_dir/$(dirname "$relative")" || \
          ! cp -p "$root/$relative" "$backup_dir/$relative"; then
-        echo "백업 실패: $relative" >&2
+        echo "$(ubs_msg UPDATE_BACKUP_FAILED "$relative")" >&2
         rm -rf "$temp_dir"
         return 1
       fi
@@ -430,26 +439,26 @@ ubs_run_update() {
 
   for relative in "${changed_paths[@]}"; do
     if ! ubs_update_safe_destination "$root" "$relative"; then
-      echo "교체 직전 경로 검증 실패: $relative — 적용된 파일을 복원합니다." >&2
+      echo "$(ubs_msg UPDATE_REPLACE_PRECHECK_FAILED "$relative")" >&2
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -rf "$temp_dir"
       return 1
     fi
     destination="$root/$relative"
     if ! mkdir -p "$(dirname "$destination")"; then
-      echo "대상 경로 생성 실패: $relative — 적용된 파일을 복원합니다." >&2
+      echo "$(ubs_msg UPDATE_DEST_DIR_FAILED "$relative")" >&2
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -rf "$temp_dir"
       return 1
     fi
     install_tmp="$(mktemp "$destination.ubs-new.XXXXXX")" || {
-      echo "교체 임시 파일 생성 실패: $relative — 적용된 파일을 복원합니다." >&2
+      echo "$(ubs_msg UPDATE_REPLACE_TEMP_FAILED "$relative")" >&2
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -rf "$temp_dir"
       return 1
     }
     if ! cp "$temp_dir/stage/$relative" "$install_tmp"; then
-      echo "교체 준비 실패: $relative" >&2
+      echo "$(ubs_msg UPDATE_REPLACE_PREP_FAILED "$relative")" >&2
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -rf "$temp_dir"
       return 1
@@ -459,14 +468,14 @@ ubs_run_update() {
       *) mode=644 ;;
     esac
     if ! chmod "$mode" "$install_tmp"; then
-      echo "권한 설정 실패: $relative — 적용된 파일을 복원합니다." >&2
+      echo "$(ubs_msg UPDATE_PERMISSION_FAILED "$relative")" >&2
       rm -f "$install_tmp"
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -rf "$temp_dir"
       return 1
     fi
     if ! mv -f "$install_tmp" "$destination"; then
-      echo "교체 실패: $relative — 적용된 파일을 복원합니다." >&2
+      echo "$(ubs_msg UPDATE_REPLACE_FAILED "$relative")" >&2
       ubs_update_restore "$root" "$backup_dir" "${installed_paths[@]}"
       rm -f "$install_tmp"
       rm -rf "$temp_dir"
@@ -486,10 +495,10 @@ ubs_run_update() {
      [ -n "$helper_dir" ] && [ "$helper_dir" = "$root_helper_dir" ]; then
     if command -v cargo >/dev/null 2>&1; then
       if ! bash "$root/scripts/build-rust-helper.sh"; then
-        echo "경고: 관리 파일은 갱신됐지만 Rust helper 재빌드에 실패했습니다. portable fallback을 사용할 수 있습니다." >&2
+        echo "$(ubs_msg UPDATE_RUST_REBUILD_FAILED)" >&2
       fi
     else
-      echo "경고: Rust helper 소스가 갱신됐지만 cargo가 없어 바이너리를 재빌드하지 못했습니다." >&2
+      echo "$(ubs_msg UPDATE_RUST_REBUILD_NO_CARGO)" >&2
     fi
   fi
 
@@ -497,6 +506,6 @@ ubs_run_update() {
   UBS_UPDATE_CLEANUP_TEMP=""
   UBS_UPDATE_CLEANUP_LOCK=""
   trap - EXIT
-  echo "업데이트 완료: $remote_version"
-  echo "백업 위치: $backup_dir"
+  echo "$(ubs_msg UPDATE_COMPLETE "$remote_version")"
+  echo "$(ubs_msg UPDATE_BACKUP_LOCATION "$backup_dir")"
 }

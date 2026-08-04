@@ -5,8 +5,26 @@
 # no-follow path checks, atomic replacement, and rollback.
 set -euo pipefail
 
+# Standalone installer (curl | bash) — no other repo files exist yet, so this
+# can't source scripts/lib/i18n.sh. Language detection/messages are embedded
+# inline here and again below in the Python heredoc.
+_ubs_install_lang() {
+  local raw="${UBS_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}"
+  case "$raw" in
+    ko*) echo ko ;;
+    ja*) echo ja ;;
+    zh*) echo zh ;;
+    *) echo en ;;
+  esac
+}
+
 command -v python3 >/dev/null 2>&1 || {
-  echo "ERROR: Universal Build Script installer requires Python 3.9+." >&2
+  case "$(_ubs_install_lang)" in
+    ko) echo "ERROR: Universal Build Script 설치기는 Python 3.9 이상이 필요합니다." >&2 ;;
+    ja) echo "ERROR: Universal Build Script インストーラーには Python 3.9 以上が必要です。" >&2 ;;
+    zh) echo "错误：Universal Build Script 安装程序需要 Python 3.9 或更高版本。" >&2 ;;
+    *) echo "ERROR: Universal Build Script installer requires Python 3.9+." >&2 ;;
+  esac
   exit 1
 }
 
@@ -25,6 +43,164 @@ import time
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
+
+
+# Standalone installer — can't import scripts/i18n.py (doesn't exist locally
+# yet), so language detection/messages are embedded here too.
+def _detect_lang() -> str:
+    raw = (
+        os.environ.get("UBS_LANG")
+        or os.environ.get("LC_ALL")
+        or os.environ.get("LC_MESSAGES")
+        or os.environ.get("LANG")
+        or "en"
+    )
+    code = raw.split(".")[0].split("_")[0].lower()
+    return code if code in ("ko", "en", "ja", "zh") else "en"
+
+
+_LANG = _detect_lang()
+
+_MESSAGES: Dict[str, Dict[str, str]] = {
+    "OPENSSL_REQUIRED": {
+        "ko": "manifest 서명 검증에는 openssl이 필요합니다.",
+        "en": "manifest signature verification requires openssl.",
+        "ja": "manifest 署名検証には openssl が必要です。",
+        "zh": "manifest 签名验证需要 openssl。",
+    },
+    "SIGNATURE_INVALID": {
+        "ko": "manifest 서명 검증 실패 — 다운로드 채널이 침해됐을 수 있습니다.",
+        "en": "manifest signature verification failed — the download channel may be compromised.",
+        "ja": "manifest の署名検証に失敗しました — ダウンロード経路が侵害されている可能性があります。",
+        "zh": "manifest 签名验证失败 —— 下载渠道可能已被攻破。",
+    },
+    "FILE_SOURCE_TEST_ONLY": {
+        "ko": "file:// 설치 소스는 명시적 테스트 모드에서만 허용됩니다.",
+        "en": "file:// install source is allowed only in explicit test mode.",
+        "ja": "file:// インストールソースは明示的なテストモードでのみ許可されます。",
+        "zh": "仅在显式测试模式下才允许使用 file:// 安装源。",
+    },
+    "SOURCE_REQUIRES_HTTPS": {
+        "ko": "설치 소스는 HTTPS만 허용됩니다: {url}",
+        "en": "install source must use HTTPS: {url}",
+        "ja": "インストールソースは HTTPS のみ許可されます: {url}",
+        "zh": "安装源必须使用 HTTPS：{url}",
+    },
+    "DOWNLOAD_FAILED": {
+        "ko": "다운로드 실패: {relative}: {error}",
+        "en": "download failed: {relative}: {error}",
+        "ja": "ダウンロードに失敗しました: {relative}: {error}",
+        "zh": "下载失败：{relative}：{error}",
+    },
+    "MANIFEST_LINE_INVALID": {
+        "ko": "잘못된 manifest 줄입니다: {number}",
+        "en": "invalid manifest line {number}",
+        "ja": "無効な manifest 行です: {number}",
+        "zh": "无效的 manifest 行：{number}",
+    },
+    "MANIFEST_SHA256_INVALID": {
+        "ko": "manifest {number}번째 줄의 SHA-256 값이 잘못됐습니다.",
+        "en": "invalid SHA-256 on manifest line {number}",
+        "ja": "manifest {number} 行目の SHA-256 が無効です。",
+        "zh": "manifest 第 {number} 行的 SHA-256 无效。",
+    },
+    "MANIFEST_DUP_PATH": {
+        "ko": "manifest에 중복된 경로입니다: {relative}",
+        "en": "duplicate manifest path: {relative}",
+        "ja": "manifest に重複したパスがあります: {relative}",
+        "zh": "manifest 中存在重复路径：{relative}",
+    },
+    "VERSION_MISMATCH": {
+        "ko": "설치기/manifest 버전이 일치하지 않습니다: {installer} != {manifest}",
+        "en": "installer/manifest version mismatch: {installer} != {manifest}",
+        "ja": "インストーラーと manifest のバージョンが一致しません: {installer} != {manifest}",
+        "zh": "安装程序与 manifest 版本不匹配：{installer} != {manifest}",
+    },
+    "MANIFEST_SET_MISMATCH": {
+        "ko": "관리 대상 manifest 구성이 다릅니다: missing={missing} extra={extra}",
+        "en": "managed manifest mismatch: missing={missing} extra={extra}",
+        "ja": "管理対象 manifest の構成が一致しません: missing={missing} extra={extra}",
+        "zh": "受管理的 manifest 内容不匹配：missing={missing} extra={extra}",
+    },
+    "UNSAFE_PATH": {
+        "ko": "안전하지 않은 설치 경로입니다: {relative}",
+        "en": "unsafe install path: {relative}",
+        "ja": "安全でないインストールパスです: {relative}",
+        "zh": "不安全的安装路径：{relative}",
+    },
+    "SYMLINK_PATH_REFUSED": {
+        "ko": "심볼릭 링크 설치 경로는 거부합니다: {relative}",
+        "en": "refusing symbolic-link install path: {relative}",
+        "ja": "シンボリックリンクのインストールパスは拒否されます: {relative}",
+        "zh": "拒绝符号链接安装路径：{relative}",
+    },
+    "DEST_NOT_FILE": {
+        "ko": "설치 대상이 파일이 아닙니다: {relative}",
+        "en": "install destination is not a file: {relative}",
+        "ja": "インストール先がファイルではありません: {relative}",
+        "zh": "安装目标不是文件：{relative}",
+    },
+    "SHA256_MISMATCH": {
+        "ko": "SHA-256 불일치: {relative}",
+        "en": "SHA-256 mismatch: {relative}",
+        "ja": "SHA-256 が一致しません: {relative}",
+        "zh": "SHA-256 不匹配：{relative}",
+    },
+    "INSTALLED": {
+        "ko": "설치됨: {relative}",
+        "en": "installed: {relative}",
+        "ja": "インストール済み: {relative}",
+        "zh": "已安装：{relative}",
+    },
+    "INSTALLER_HEADER": {
+        "ko": "Universal Build Script {version} 트랜잭션 설치기 ({kind})",
+        "en": "Universal Build Script {version} transactional installer ({kind})",
+        "ja": "Universal Build Script {version} トランザクション型インストーラー ({kind})",
+        "zh": "Universal Build Script {version} 事务性安装程序（{kind}）",
+    },
+    "SOURCE_LABEL": {
+        "ko": "소스: {url}",
+        "en": "source: {url}",
+        "ja": "ソース: {url}",
+        "zh": "来源：{url}",
+    },
+    "PRESERVED": {
+        "ko": "보존됨: {relative} (교체하려면 UBS_FORCE=true 설정)",
+        "en": "preserved: {relative} (set UBS_FORCE=true to replace)",
+        "ja": "保持されました: {relative}(置き換えるには UBS_FORCE=true を設定)",
+        "zh": "已保留：{relative}（如需替换请设置 UBS_FORCE=true）",
+    },
+    "INSTALL_COMPLETE": {
+        "ko": "설치 완료",
+        "en": "installation complete",
+        "ja": "インストール完了",
+        "zh": "安装完成",
+    },
+    "HINT_DETECT": {
+        "ko": "감지: ./build.sh detect",
+        "en": "detect: ./build.sh detect",
+        "ja": "検出: ./build.sh detect",
+        "zh": "检测：./build.sh detect",
+    },
+    "HINT_BUILD": {
+        "ko": "빌드:  ./build.sh",
+        "en": "build:  ./build.sh",
+        "ja": "ビルド: ./build.sh",
+        "zh": "构建：./build.sh",
+    },
+    "INSTALL_FAILED": {
+        "ko": "설치 실패: {error}",
+        "en": "installation failed: {error}",
+        "ja": "インストールに失敗しました: {error}",
+        "zh": "安装失败：{error}",
+    },
+}
+
+
+def t(key: str, **kwargs) -> str:
+    table = _MESSAGES.get(key, {})
+    template = table.get(_LANG) or table.get("en") or key
+    return template.format(**kwargs) if kwargs else template
 
 
 # scripts/sign-update-manifest.sh 로 서명할 때 쓰는 개인키와 짝을 이루는 공개키.
@@ -57,6 +233,8 @@ MANAGED = (
     "scripts/build-gradle.sh", "scripts/build-node.sh",
     "scripts/lib/detect.sh", "scripts/lib/audit.sh",
     "scripts/lib/node-package-manager.sh", "scripts/lib/update.sh",
+    "scripts/lib/i18n.sh", "scripts/lib/i18n_messages.sh",
+    "scripts/i18n.py", "scripts/i18n_messages.py",
     "skills/universal-build/SKILL.md", "skills/universal-build/agents/openai.yaml",
     "skills/universal-build/references/optimization.md",
     "templates/flutter/ExportOptions.plist",
@@ -89,9 +267,9 @@ google-services.json
 
 def fetch(relative: str) -> bytes:
     if BASE_URL.startswith("file://") and not ALLOW_FILE:
-        raise RuntimeError("file:// install source is allowed only in explicit test mode")
+        raise RuntimeError(t("FILE_SOURCE_TEST_ONLY"))
     if not (BASE_URL.startswith("https://") or BASE_URL.startswith("file://")):
-        raise RuntimeError(f"install source must use HTTPS: {BASE_URL}")
+        raise RuntimeError(t("SOURCE_REQUIRES_HTTPS", url=BASE_URL))
     url = urljoin(BASE_URL, relative)
     last_error: Optional[Exception] = None
     for attempt in range(3):
@@ -103,7 +281,7 @@ def fetch(relative: str) -> bytes:
             last_error = error
             if attempt < 2:
                 time.sleep(0.25 * (attempt + 1))
-    raise RuntimeError(f"download failed: {relative}: {last_error}")
+    raise RuntimeError(t("DOWNLOAD_FAILED", relative=relative, error=last_error))
 
 
 def verify_manifest_signature(manifest: bytes, signature: bytes) -> None:
@@ -113,7 +291,7 @@ def verify_manifest_signature(manifest: bytes, signature: bytes) -> None:
     # 동작하지 않는다.
     openssl = shutil.which("openssl")
     if not openssl:
-        raise RuntimeError("manifest 서명 검증에는 openssl이 필요합니다.")
+        raise RuntimeError(t("OPENSSL_REQUIRED"))
     with tempfile.TemporaryDirectory(prefix="ubs-install-verify-") as tmp:
         tmp_path = Path(tmp)
         pubkey_file = tmp_path / "pubkey.pem"
@@ -128,7 +306,7 @@ def verify_manifest_signature(manifest: bytes, signature: bytes) -> None:
             capture_output=True,
         )
         if result.returncode != 0:
-            raise RuntimeError("manifest 서명 검증 실패 — 다운로드 채널이 침해됐을 수 있습니다.")
+            raise RuntimeError(t("SIGNATURE_INVALID"))
 
 
 def parse_manifest(data: bytes) -> Dict[str, str]:
@@ -142,26 +320,26 @@ def parse_manifest(data: bytes) -> Dict[str, str]:
             version = fields[1]
             continue
         if len(fields) != 3 or fields[0] != "file":
-            raise RuntimeError(f"invalid manifest line {number}")
+            raise RuntimeError(t("MANIFEST_LINE_INVALID", number=number))
         digest, relative = fields[1:]
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise RuntimeError(f"invalid SHA-256 on manifest line {number}")
+            raise RuntimeError(t("MANIFEST_SHA256_INVALID", number=number))
         if relative in entries:
-            raise RuntimeError(f"duplicate manifest path: {relative}")
+            raise RuntimeError(t("MANIFEST_DUP_PATH", relative=relative))
         entries[relative] = digest
     if version != VERSION:
-        raise RuntimeError(f"installer/manifest version mismatch: {VERSION} != {version}")
+        raise RuntimeError(t("VERSION_MISMATCH", installer=VERSION, manifest=version))
     if set(entries) != set(MANAGED):
         missing = sorted(set(MANAGED) - set(entries))
         extra = sorted(set(entries) - set(MANAGED))
-        raise RuntimeError(f"managed manifest mismatch: missing={missing} extra={extra}")
+        raise RuntimeError(t("MANIFEST_SET_MISMATCH", missing=missing, extra=extra))
     return entries
 
 
 def safe_relative(relative: str) -> PurePosixPath:
     path = PurePosixPath(relative)
     if not relative or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise RuntimeError(f"unsafe install path: {relative}")
+        raise RuntimeError(t("UNSAFE_PATH", relative=relative))
     return path
 
 
@@ -171,7 +349,7 @@ def destination_for(relative: str) -> Path:
     for part in path.parts:
         current = current / part
         if current.is_symlink():
-            raise RuntimeError(f"refusing symbolic-link install path: {relative}")
+            raise RuntimeError(t("SYMLINK_PATH_REFUSED", relative=relative))
     return current
 
 
@@ -228,7 +406,7 @@ def apply_transaction(changes: Dict[str, Tuple[bytes, int]]) -> None:
         destination = destination_for(relative)
         if destination.exists():
             if not destination.is_file():
-                raise RuntimeError(f"install destination is not a file: {relative}")
+                raise RuntimeError(t("DEST_NOT_FILE", relative=relative))
             backups[relative] = (destination.read_bytes(), stat.S_IMODE(destination.stat().st_mode))
         else:
             backups[relative] = None
@@ -236,7 +414,7 @@ def apply_transaction(changes: Dict[str, Tuple[bytes, int]]) -> None:
         for relative, (data, mode) in changes.items():
             atomic_write(destination_for(relative), data, mode)
             applied.append(relative)
-            print(f"installed: {relative}")
+            print(t("INSTALLED", relative=relative))
     except Exception:
         for relative in reversed(applied):
             destination = destination_for(relative)
@@ -251,8 +429,8 @@ def apply_transaction(changes: Dict[str, Tuple[bytes, int]]) -> None:
 
 def main() -> None:
     kind = project_type()
-    print(f"Universal Build Script {VERSION} transactional installer ({kind})")
-    print(f"source: {BASE_URL}")
+    print(t("INSTALLER_HEADER", version=VERSION, kind=kind))
+    print(t("SOURCE_LABEL", url=BASE_URL))
 
     key_fingerprint = hashlib.sha256(MANIFEST_PUBLIC_KEY_PEM.encode("utf-8")).hexdigest()
     print(f"manifest public key fingerprint (SHA-256): {key_fingerprint}")
@@ -266,14 +444,14 @@ def main() -> None:
         data = fetch(relative)
         actual = hashlib.sha256(data).hexdigest()
         if actual != manifest[relative]:
-            raise RuntimeError(f"SHA-256 mismatch: {relative}")
+            raise RuntimeError(t("SHA256_MISMATCH", relative=relative))
         staged[relative] = data
 
     changes: Dict[str, Tuple[bytes, int]] = {}
     for relative in MANAGED:
         destination = destination_for(relative)
         if destination.is_file() and not FORCE:
-            print(f"preserved: {relative} (set UBS_FORCE=true to replace)")
+            print(t("PRESERVED", relative=relative))
             continue
         mode = 0o755 if relative.endswith(".sh") or relative in {
             "scripts/ubs.py", "scripts/ubs_mcp.py",
@@ -318,14 +496,14 @@ def main() -> None:
         import subprocess
         subprocess.run(["bash", "scripts/build-rust-helper.sh"], check=True)
 
-    print("installation complete")
-    print("detect: ./build.sh detect")
-    print("build:  ./build.sh")
+    print(t("INSTALL_COMPLETE"))
+    print(t("HINT_DETECT"))
+    print(t("HINT_BUILD"))
 
 
 try:
     main()
 except Exception as error:
-    print(f"installation failed: {error}", file=__import__("sys").stderr)
+    print(t("INSTALL_FAILED", error=error), file=__import__("sys").stderr)
     raise SystemExit(1)
 PY

@@ -6,9 +6,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE="$SCRIPT_DIR/scripts/ubs.py"
+source "$SCRIPT_DIR/scripts/lib/i18n.sh"
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "ERROR: Universal Build Script에는 Python 3가 필요합니다." >&2
+  echo "$(ubs_msg BUILD_NEED_PYTHON3)" >&2
   exit 1
 fi
 if [ ! -f "$CORE" ] && [ "${1:-}" = "update" ] && [ -f "$SCRIPT_DIR/scripts/bootstrap-update.sh" ]; then
@@ -16,8 +17,8 @@ if [ ! -f "$CORE" ] && [ "${1:-}" = "update" ] && [ -f "$SCRIPT_DIR/scripts/boot
   exec bash "$SCRIPT_DIR/scripts/bootstrap-update.sh" "$@"
 fi
 if [ ! -f "$CORE" ]; then
-  echo "ERROR: Python 코어를 찾을 수 없습니다: $CORE" >&2
-  echo "설치기를 다시 실행하여 관리 런타임을 복구하세요." >&2
+  echo "$(ubs_msg BUILD_CORE_NOT_FOUND "$CORE")" >&2
+  echo "$(ubs_msg BUILD_REINSTALL_HINT)" >&2
   exit 1
 fi
 

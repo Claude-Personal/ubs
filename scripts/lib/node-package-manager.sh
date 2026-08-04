@@ -2,6 +2,9 @@
 
 # packageManager 필드와 lock 파일을 이용해 Node 패키지 매니저를 통일해서 선택한다.
 
+_NPM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_NPM_LIB_DIR/i18n.sh"
+
 detect_node_package_manager() {
   local declared=""
   local current="$PWD"
@@ -46,7 +49,7 @@ PY
   esac
 
   command -v "$NODE_PM" >/dev/null 2>&1 || {
-    echo "$NODE_PM 패키지 매니저가 필요합니다." >&2
+    echo "$(ubs_msg NODE_PM_REQUIRED "$NODE_PM")" >&2
     return 1
   }
 }
@@ -74,7 +77,7 @@ install_node_dependencies() {
   if [ "${UBS_INSTALL_MODE:-auto}" = "auto" ]; then
     digest="$(node_dependency_digest | node_dependency_sha256)"
     if [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$digest" ]; then
-      echo -e "${CYAN}ℹ️  의존성 입력이 변경되지 않아 $NODE_PM install을 생략합니다.${NC}"
+      echo -e "${CYAN}ℹ️  $(ubs_msg NODE_PM_SKIP_INSTALL "$NODE_PM")${NC}"
       return 0
     fi
   fi
