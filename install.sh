@@ -216,7 +216,7 @@ CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
 -----END PUBLIC KEY-----
 """
 
-VERSION = "3.8.1"
+VERSION = "3.9.1"
 REPOSITORY = "https://raw.githubusercontent.com/Claude-Personal/ubs"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"

@@ -147,8 +147,8 @@ assert result["schema_version"] == 1
 assert result["ok"] is True
 assert result["mode"] == "check"
 assert result["status"] == 0
-assert result["local_version"] == "3.8.1"
-assert result["remote_version"] == "3.8.1"
+assert result["local_version"] == "3.9.1"
+assert result["remote_version"] == "3.9.1"
 assert result["changed_paths"] == []
 assert result["backup_path"] is None
 assert isinstance(result["output"], list)
