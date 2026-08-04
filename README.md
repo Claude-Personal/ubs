@@ -796,6 +796,13 @@ UBS_INSTALL_MODE=always ./build.sh
 | `UBS_INSTALL_REF` | 현재 release tag | 설치기가 받을 불변 Git ref |
 | `UBS_MCP_ROOT` | 서버 시작 디렉터리 | MCP가 접근할 수 있는 workspace 경계 |
 | `UBS_MCP_ALLOW_BUILD` | `false` | MCP 실제 빌드 도구를 명시적으로 노출 |
+| `UBS_LANG` | `en` | CLI 출력 언어; 지원 값 `ko`/`en`/`ja`/`zh` |
+
+우선순위는 `UBS_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` > 기본값 `en` 순으로 결정되며, 지원하지 않는 값은 `en`으로 대체됩니다.
+
+```bash
+UBS_LANG=ja ./build.sh detect
+```
 
 ### Tauri 전용 설정
 

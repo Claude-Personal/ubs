@@ -49,6 +49,12 @@ Python 3.9 以上は必須、Rust は任意です。
 
 installer は不変の current release ref を既定で使います。`UBS_INSTALL_REF`、`UBS_JOBS`、`UBS_INSTALL_MODE`、`UBS_MANAGE_GITIGNORE`、`UBS_GRADLE_FLAGS`、`UBS_GRADLE_OPTIMIZE` を設定できます。
 
+CLI 出力の言語は `UBS_LANG` で切り替えられます。優先順位は `UBS_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` > 既定値 `en` で、対応言語は `ko`・`en`・`ja`・`zh` です。
+
+```bash
+UBS_LANG=ja ./build.sh detect
+```
+
 成果物レポートを含む例:
 
 ```bash

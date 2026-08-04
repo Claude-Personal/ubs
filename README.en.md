@@ -494,6 +494,13 @@ git check-ignore .env .env.macos signing/App.provisionprofile build/app.aab
 | `UBS_MCP_ROOT` | server start directory | Workspace boundary for the MCP server |
 | `UBS_MCP_ALLOW_BUILD` | `false` | Expose the `ubs_build` MCP tool |
 | `GOOGLE_PLAY_TRACK` | `internal` | Google Play publish track |
+| `UBS_LANG` | `en` | CLI output language; supports `ko`/`en`/`ja`/`zh` |
+
+Resolution order is `UBS_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` > default `en`; anything unsupported falls back to `en`.
+
+```bash
+UBS_LANG=ja ./build.sh detect
+```
 
 `.env.macos` is parsed for exactly `TAURI_SIGN_IDENTITY`, `TAURI_INSTALLER_IDENTITY`, `TAURI_PROVISION_PROFILE`, `TAURI_ENTITLEMENTS`, and `TAURI_OBFUSCATE_JS` — as plain `key=value` text, never `source`d, so shell expressions or command substitution inside it are never executed.
 
