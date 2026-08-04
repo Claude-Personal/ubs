@@ -8,10 +8,14 @@ source "$_UBS_I18N_DIR/i18n_messages.sh"
 
 ubs_detect_lang() {
   local raw="${UBS_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}"
-  case "$raw" in
-    ko*) echo ko ;;
-    ja*) echo ja ;;
-    zh*) echo zh ;;
+  # Mirror scripts/i18n.py's algorithm exactly: strip to the first segment
+  # before "." or "_", lowercase, then exact-match — not a prefix glob, so
+  # e.g. "kok_IN.UTF-8" (Konkani) doesn't get misread as "ko".
+  local code="${raw%%.*}"
+  code="${code%%_*}"
+  code="$(printf '%s' "$code" | tr '[:upper:]' '[:lower:]')"
+  case "$code" in
+    ko|en|ja|zh) echo "$code" ;;
     *) echo en ;;
   esac
 }

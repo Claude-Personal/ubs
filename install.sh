@@ -10,10 +10,11 @@ set -euo pipefail
 # inline here and again below in the Python heredoc.
 _ubs_install_lang() {
   local raw="${UBS_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}"
-  case "$raw" in
-    ko*) echo ko ;;
-    ja*) echo ja ;;
-    zh*) echo zh ;;
+  local code="${raw%%.*}"
+  code="${code%%_*}"
+  code="$(printf '%s' "$code" | tr '[:upper:]' '[:lower:]')"
+  case "$code" in
+    ko|en|ja|zh) echo "$code" ;;
     *) echo en ;;
   esac
 }
@@ -144,7 +145,7 @@ _MESSAGES: Dict[str, Dict[str, str]] = {
         "ko": "SHA-256 불일치: {relative}",
         "en": "SHA-256 mismatch: {relative}",
         "ja": "SHA-256 が一致しません: {relative}",
-        "zh": "SHA-256 不匹配：{relative}",
+        "zh": "SHA-256 不匹配: {relative}",
     },
     "INSTALLED": {
         "ko": "설치됨: {relative}",

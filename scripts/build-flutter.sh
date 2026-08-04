@@ -358,12 +358,12 @@ if [ "$VERSION_CHANGED" = true ]; then
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git add -- "$PUBSPEC" 2>/dev/null
     if git commit -m "chore: 버전 ${NEW_VERSION}" -- "$PUBSPEC" >/dev/null 2>&1; then
-      echo -e "${GREEN}✅ 버전 변경 커밋: chore: 버전 ${NEW_VERSION}${NC}"
+      echo -e "${GREEN}✅ $(ubs_msg VERSION_COMMIT_SUCCESS "$NEW_VERSION")${NC}"
     else
-      echo -e "${YELLOW}⚠️  버전 변경(${NEW_VERSION})을 자동 커밋하지 못했습니다 — 직접 커밋하세요.${NC}" >&2
+      echo -e "${YELLOW}⚠️  $(ubs_msg VERSION_COMMIT_FAILED "$NEW_VERSION")${NC}" >&2
     fi
   else
-    echo -e "${YELLOW}⚠️  git 저장소가 아니라 버전 변경(${NEW_VERSION})이 uncommitted 상태로 남습니다.${NC}" >&2
+    echo -e "${YELLOW}⚠️  $(ubs_msg VERSION_COMMIT_NOT_GIT_REPO "$NEW_VERSION")${NC}" >&2
   fi
 fi
 
@@ -379,8 +379,8 @@ BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 
 if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
   afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
-  say "Build process completed successfully" 2>/dev/null || true
-  osascript -e "display notification \"$(ubs_msg NOTIFY_BUILD_DONE "$NEW_VERSION" "$BUILD_ELAPSED_FMT")\" with title \"✅ Build Finished\" subtitle \"Deployment files are ready\"" 2>/dev/null || true
+  say "$(ubs_msg NOTIFY_TTS_BUILD_COMPLETE)" 2>/dev/null || true
+  osascript -e "display notification \"$(ubs_msg NOTIFY_BUILD_DONE "$NEW_VERSION" "$BUILD_ELAPSED_FMT")\" with title \"✅ $(ubs_msg NOTIFY_TITLE_BUILD_FINISHED)\" subtitle \"$(ubs_msg NOTIFY_SUBTITLE_DEPLOYMENT_READY)\"" 2>/dev/null || true
 fi
 
 echo -e "------------------------------------------------------------"

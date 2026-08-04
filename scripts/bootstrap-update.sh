@@ -6,7 +6,14 @@ set -e
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPDATE_LIB="$ROOT/scripts/lib/update.sh"
-source "$ROOT/scripts/lib/i18n.sh"
+I18N_LIB="$ROOT/scripts/lib/i18n.sh"
+if [ -f "$I18N_LIB" ]; then
+  source "$I18N_LIB"
+else
+  # This script IS the self-heal path — if i18n.sh is what's missing, we still
+  # need to be able to print the "can't recover" message below without it.
+  ubs_msg() { printf '%s' "$1"; }
+fi
 CHECK=false
 DRY_RUN=false
 JSON=false
@@ -66,7 +73,11 @@ if [ "$JSON" = true ]; then
   set +e
   # Parsed below by fixed-English prefix match, so force en regardless of the
   # user's UBS_LANG — otherwise a non-en locale silently breaks backup parsing.
-  OUTPUT="$(UBS_LANG=en ubs_run_update "$ROOT" "$CHECK" "$DRY_RUN")"
+  # ubs_run_update is a function in *this* shell, so a `VAR=val` prefix has no
+  # effect on it (scripts/lib/i18n.sh resolves UBS_LANG once at source time) —
+  # re-exec in a fresh subprocess instead, so the override actually takes hold.
+  OUTPUT="$(UBS_LANG=en bash -c 'source "$1"; source "$2"; ubs_run_update "$3" "$4" "$5"' \
+    _ "$ROOT/scripts/lib/i18n.sh" "$UPDATE_LIB" "$ROOT" "$CHECK" "$DRY_RUN")"
   STATUS=$?
   set -e
   MODE="$([ "$CHECK" = true ] && echo check || { [ "$DRY_RUN" = true ] && echo dry-run || echo apply; })"
