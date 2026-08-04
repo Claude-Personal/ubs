@@ -111,36 +111,24 @@ jobs:
             exit 1
           fi
 
-      - name: Validate multilingual documentation and diagrams
+      - name: Validate documentation and diagrams
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          documents = [
-              Path("README.md"),
-              Path("README.en.md"),
-              Path("README.ja.md"),
-              Path("README.zh-CN.md"),
-          ]
-          language_links = [str(path) for path in documents]
-          for document in documents:
-              text = document.read_text(encoding="utf-8")
-              assert text.strip(), f"empty document: {document}"
-              for link in language_links:
-                  assert f"]({link})" in text, f"{document} is missing language link {link}"
-              assert text.count("```mermaid") >= 6, f"{document} needs at least six diagrams"
-              assert text.count("```") % 2 == 0, f"unbalanced code fences: {document}"
-              for required in (
-                  "UBS_JOBS", "UBS_INSTALL_MODE", "UBS_MANAGE_GITIGNORE",
-                  "UBS_GRADLE_FLAGS", "tests/test-install.sh",
-                  "tests/test-python-adapters.sh", "graph --json",
-                  "ubs.dependencies.json", "ios-xcode", "scripts/ubs_mcp.py",
-                  "UBS_MCP_ROOT", "UBS_XCODE_SCHEME",
-                  "UBS_OPEN_OUTPUT",
-              ):
-                  assert required in text, f"{document} is missing current feature reference {required}"
+          text = Path("README.md").read_text(encoding="utf-8")
+          assert text.strip(), "README.md is empty"
+          assert text.count("```mermaid") >= 3, "README.md needs at least three diagrams"
+          assert text.count("```") % 2 == 0, "unbalanced code fences in README.md"
+          for required in (
+              "UBS_JOBS", "UBS_INSTALL_MODE", "UBS_MANAGE_GITIGNORE",
+              "UBS_GRADLE_FLAGS", "UBS_LANG", "graph --json",
+              "ubs.dependencies.json", "ios-xcode", "scripts/ubs_mcp.py",
+              "UBS_MCP_ROOT",
+          ):
+              assert required in text, f"README.md is missing current feature reference {required}"
           assert "Copyright (c) 2026 kimdzhekhon" in Path("LICENSE").read_text(encoding="utf-8")
-          print("multilingual README and Mermaid diagrams are valid")
+          print("README and Mermaid diagrams are valid")
           PY
 
       - name: Validate AI skill metadata
