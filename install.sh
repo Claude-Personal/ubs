@@ -36,12 +36,13 @@ import hashlib
 import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 import re
 import stat
 import tempfile
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -374,20 +375,60 @@ def atomic_write(destination: Path, data: bytes, mode: int) -> None:
             temporary.unlink()
 
 
-def project_type() -> str:
+def detect_kinds() -> FrozenSet[str]:
+    kinds = set()
     if (ROOT / "src-tauri" / "tauri.conf.json").is_file():
-        return "tauri"
+        kinds.add("tauri")
     pubspec = ROOT / "pubspec.yaml"
     if pubspec.is_file() and re.search(
         r"sdk:\s*flutter|^\s*flutter:", pubspec.read_text(encoding="utf-8", errors="replace"), re.MULTILINE,
     ):
-        return "flutter"
+        kinds.add("flutter")
     if any((ROOT / name).is_file() for name in ("gradlew", "settings.gradle", "settings.gradle.kts")):
-        return "gradle"
+        kinds.add("gradle")
     package = ROOT / "package.json"
     if package.is_file() and re.search(r'"build"\s*:', package.read_text(encoding="utf-8", errors="replace")):
-        return "node"
-    return "workspace"
+        kinds.add("node")
+    return frozenset(kinds)
+
+
+# Files every install needs regardless of detected project kind(s).
+COMMON_FILES: FrozenSet[str] = frozenset({
+    "VERSION", "build.sh", "install.sh", "scripts/ubs.py", "scripts/ubs_mcp.py",
+    "scripts/bootstrap-update.sh", "scripts/lib/detect.sh", "scripts/lib/audit.sh",
+    "scripts/lib/node-package-manager.sh", "scripts/lib/update.sh",
+    "scripts/lib/i18n.sh", "scripts/lib/i18n_messages.sh",
+    "scripts/i18n.py", "scripts/i18n_messages.py",
+    "skills/universal-build/SKILL.md", "skills/universal-build/agents/openai.yaml",
+    "skills/universal-build/references/optimization.md",
+})
+
+# Adapter-specific files, fetched only when the matching kind is detected.
+KIND_FILES: Dict[str, FrozenSet[str]] = {
+    "flutter": frozenset({
+        "scripts/FLUTTER_VERSION", "scripts/build-flutter.sh",
+        "templates/flutter/ExportOptions.plist",
+    }),
+    "tauri": frozenset({
+        "scripts/build-rust-helper.sh", "native/ubs-helper/Cargo.toml",
+        "native/ubs-helper/Cargo.lock", "native/ubs-helper/src/main.rs",
+        "scripts/TAURI_VERSION", "scripts/build-tauri.sh",
+        "scripts/build-tauri-macos.sh",
+    }),
+    "gradle": frozenset({"scripts/build-gradle.sh"}),
+    "node": frozenset({"scripts/build-node.sh"}),
+}
+
+
+def managed_selection(kinds: FrozenSet[str]) -> Tuple[str, ...]:
+    # No kind detected (bare workspace / ambiguous monorepo root): stay safe
+    # and install every adapter rather than guessing which ones are needed.
+    if not kinds:
+        return MANAGED
+    selected = set(COMMON_FILES)
+    for kind in kinds:
+        selected |= KIND_FILES[kind]
+    return tuple(relative for relative in MANAGED if relative in selected)
 
 
 def add_change(
@@ -429,8 +470,10 @@ def apply_transaction(changes: Dict[str, Tuple[bytes, int]]) -> None:
 
 
 def main() -> None:
-    kind = project_type()
-    print(t("INSTALLER_HEADER", version=VERSION, kind=kind))
+    kinds = detect_kinds()
+    selected = managed_selection(kinds)
+    kind_label = "+".join(sorted(kinds)) if kinds else "workspace"
+    print(t("INSTALLER_HEADER", version=VERSION, kind=kind_label))
     print(t("SOURCE_LABEL", url=BASE_URL))
 
     key_fingerprint = hashlib.sha256(MANIFEST_PUBLIC_KEY_PEM.encode("utf-8")).hexdigest()
@@ -440,16 +483,23 @@ def main() -> None:
     manifest_bytes = fetch("scripts/update-manifest.txt")
     verify_manifest_signature(manifest_bytes, fetch("scripts/update-manifest.txt.sig"))
     manifest = parse_manifest(manifest_bytes)
-    staged: Dict[str, bytes] = {}
-    for relative in MANAGED:
+
+    def fetch_verified(relative: str) -> Tuple[str, bytes]:
         data = fetch(relative)
         actual = hashlib.sha256(data).hexdigest()
         if actual != manifest[relative]:
             raise RuntimeError(t("SHA256_MISMATCH", relative=relative))
-        staged[relative] = data
+        return relative, data
+
+    staged: Dict[str, bytes] = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(selected))) as executor:
+        futures = [executor.submit(fetch_verified, relative) for relative in selected]
+        for future in as_completed(futures):
+            relative, data = future.result()
+            staged[relative] = data
 
     changes: Dict[str, Tuple[bytes, int]] = {}
-    for relative in MANAGED:
+    for relative in selected:
         destination = destination_for(relative)
         if destination.is_file() and not FORCE:
             print(t("PRESERVED", relative=relative))
@@ -472,7 +522,7 @@ def main() -> None:
         if updated != existing:
             add_change(changes, ".gitignore", updated.encode(), 0o644)
 
-    if kind == "flutter":
+    if "flutter" in kinds:
         env_example = fetch(".env.example")
         add_change(changes, ".env.example", env_example, preserve=True)
         if not (ROOT / ".env").exists() and not (ROOT / ".env.prod").exists():
@@ -482,14 +532,14 @@ def main() -> None:
                 changes, "ios/ExportOptions.plist",
                 staged["templates/flutter/ExportOptions.plist"], preserve=True,
             )
-    elif kind == "tauri":
+    if "tauri" in kinds:
         env_example = fetch(".env.macos.example")
         add_change(changes, ".env.macos.example", env_example, preserve=True)
         if not (ROOT / ".env.macos").exists():
             add_change(changes, ".env.macos", env_example, 0o600)
 
     apply_transaction(changes)
-    if kind == "tauri":
+    if "tauri" in kinds:
         signing = destination_for("signing/.keep").parent
         signing.mkdir(parents=True, exist_ok=True)
 
