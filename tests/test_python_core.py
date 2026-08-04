@@ -14,6 +14,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parent.parent
+os.environ.setdefault("UBS_LANG", "ko")
 SPEC = importlib.util.spec_from_file_location("ubs_core_test", ROOT / "scripts/ubs.py")
 assert SPEC and SPEC.loader
 ubs = importlib.util.module_from_spec(SPEC)

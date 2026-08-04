@@ -43,7 +43,7 @@ fi
 printf '\n# local drift\n' >> "$TARGET/scripts/build-node.sh"
 DRIFT_HASH="$(sha256_file "$TARGET/scripts/build-node.sh")"
 
-CHECK_OUTPUT="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+CHECK_OUTPUT="$(UBS_LANG=ko UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check)"
 printf '%s\n' "$CHECK_OUTPUT" | grep -Fq '변경 대상: 1개' || {
   echo "update --check가 변경 파일 하나를 감지하지 못했습니다." >&2
@@ -54,7 +54,7 @@ printf '%s\n' "$CHECK_OUTPUT" | grep -Fq '변경 대상: 1개' || {
   exit 1
 }
 
-DRY_OUTPUT="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+DRY_OUTPUT="$(UBS_LANG=ko UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --dry-run)"
 printf '%s\n' "$DRY_OUTPUT" | grep -Fq 'dry-run이므로' || {
   echo "update --dry-run 결과가 명확하지 않습니다." >&2
@@ -69,7 +69,7 @@ if [ "${UBS_TEST_LEGACY_RUST_HELPER:-false}" = true ]; then
   printf '\n// force native helper rebuild\n' >> "$TARGET/native/ubs-helper/src/main.rs"
 fi
 
-UPDATE_OUTPUT="$(UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
+UPDATE_OUTPUT="$(UBS_LANG=ko UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update)"
 cmp "$TARGET/scripts/build-node.sh" "$REMOTE/scripts/build-node.sh" || {
   echo "업데이트 파일이 원격 검증본과 다릅니다." >&2
