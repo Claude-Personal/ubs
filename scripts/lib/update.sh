@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 
 _UPDATE_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$_UPDATE_SH_DIR/i18n.sh"
+if [ -f "$_UPDATE_SH_DIR/i18n.sh" ]; then
+  source "$_UPDATE_SH_DIR/i18n.sh"
+else
+  # update.sh is what's supposed to restore a missing i18n.sh — its own
+  # messages must still print (degraded to the raw key) if that hasn't
+  # happened yet.
+  ubs_msg() { printf '%s' "$1"; }
+fi
 
 # Universal Build Script의 제한된 런타임 번들을 안전하게 갱신한다.
 # 원격 manifest는 서명 검증(아래 UBS_UPDATE_MANIFEST_PUBLIC_KEY)으로 무결성을

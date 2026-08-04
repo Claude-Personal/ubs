@@ -30,16 +30,41 @@ jobs:
         run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
 
       - name: Validate Python core
-        run: python -m py_compile scripts/ubs.py scripts/ubs_mcp.py tests/test_python_core.py tests/test_mcp.py
+        run: python -m py_compile scripts/ubs.py scripts/ubs_mcp.py scripts/i18n.py scripts/i18n_messages.py tests/test_python_core.py tests/test_mcp.py tests/test_i18n_detect_lang.py
+
+      - name: Validate i18n catalog integrity
+        run: |
+          # bash catalog: no duplicate UBS_MSG_<lang>_<KEY> definitions (the
+          # file is sourced top-to-bottom as plain variable assignments, so a
+          # duplicate silently wins over the earlier one instead of erroring)
+          dupes="$(grep -ohE '^UBS_MSG_[a-z]+_[A-Z0-9_]+=' scripts/lib/i18n_messages.sh | sort | uniq -d)"
+          if [ -n "$dupes" ]; then
+            echo "Duplicate catalog keys in scripts/lib/i18n_messages.sh:" >&2
+            echo "$dupes" >&2
+            exit 1
+          fi
+          # python catalog: no duplicate top-level MESSAGES keys
+          python -c "
+          import re
+          src = open('scripts/i18n_messages.py').read()
+          keys = re.findall(r'^    \"([A-Z0-9_]+)\":', src, re.M)
+          dupes = sorted({k for k in keys if keys.count(k) > 1})
+          if dupes:
+              raise SystemExit(f'Duplicate catalog keys in scripts/i18n_messages.py: {dupes}')
+          "
 
       - name: Run behavior tests
         run: |
           python tests/test_python_core.py
           python tests/test_mcp.py
+          python tests/test_i18n_detect_lang.py
           bash tests/test-detection.sh
           bash tests/test-install.sh
           bash tests/test-python-adapters.sh
           bash tests/test-update.sh
+          bash tests/test-i18n.sh
+          bash tests/test-i18n-placeholders.sh
+          bash tests/test-i18n-detect-lang.sh
 
       - name: Validate Rust helper
         run: bash tests/test-rust-helper.sh

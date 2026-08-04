@@ -95,9 +95,9 @@ else
   NEXT_PATCH="$(echo "$VERSION_NAME" | awk -F. '{print $1"."$2"."$3+1}')"
   NEXT_MINOR="$(echo "$VERSION_NAME" | awk -F. '{print $1"."$2+1".0"}')"
   NEXT_MAJOR="$(echo "$VERSION_NAME" | awk -F. '{print $1+1".0.0"}')"
-  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PATCH_BUMP)${NC}  → ${NEXT_PATCH}"
-  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_MINOR_BUMP)${NC}  → ${NEXT_MINOR}"
-  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_MAJOR_BUMP)${NC}  → ${NEXT_MAJOR}"
+  echo -e "  ${YELLOW}$(ubs_msg TAURI_MENU_OPT_PATCH_BUMP)${NC}  → ${NEXT_PATCH}"
+  echo -e "  ${YELLOW}$(ubs_msg TAURI_MENU_OPT_MINOR_BUMP)${NC}  → ${NEXT_MINOR}"
+  echo -e "  ${YELLOW}$(ubs_msg TAURI_MENU_OPT_MAJOR_BUMP)${NC}  → ${NEXT_MAJOR}"
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_KEEP_VERSION)${NC}"
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_CANCEL)${NC}"
   read -p "$(ubs_msg CHOICE_PROMPT_1_5)" VERSION_CHOICE
@@ -322,12 +322,12 @@ if [ "$VERSION_CHANGED" = true ]; then
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git add -- "$CONF" 2>/dev/null
     if git commit -m "chore: ${APP_NAME} 버전 ${NEW_VERSION}" -- "$CONF" >/dev/null 2>&1; then
-      echo -e "${GREEN}✅ 버전 변경 커밋: chore: ${APP_NAME} 버전 ${NEW_VERSION}${NC}"
+      echo -e "${GREEN}✅ $(ubs_msg VERSION_COMMIT_SUCCESS_APP "$APP_NAME" "$NEW_VERSION")${NC}"
     else
-      echo -e "${YELLOW}⚠️  버전 변경(${NEW_VERSION})을 자동 커밋하지 못했습니다 — 직접 커밋하세요.${NC}" >&2
+      echo -e "${YELLOW}⚠️  $(ubs_msg VERSION_COMMIT_FAILED "$NEW_VERSION")${NC}" >&2
     fi
   else
-    echo -e "${YELLOW}⚠️  git 저장소가 아니라 버전 변경(${NEW_VERSION})이 uncommitted 상태로 남습니다.${NC}" >&2
+    echo -e "${YELLOW}⚠️  $(ubs_msg VERSION_COMMIT_NOT_GIT_REPO "$NEW_VERSION")${NC}" >&2
   fi
 fi
 
@@ -344,13 +344,14 @@ BUILD_ELAPSED_FMT="${BUILD_ELAPSED_MIN}m ${BUILD_ELAPSED_SEC}s"
 if [[ "$OSTYPE" == "darwin"* ]] && [ "${UBS_NO_NOTIFY:-false}" != "true" ]; then
   # 빌드는 이미 성공했으므로 알림 명령 실패로 스크립트 전체가 죽지 않도록 best-effort 처리.
   afplay /System/Library/Sounds/Glass.aiff 2>/dev/null || true
-  say "Build process completed successfully" 2>/dev/null || true
+  say "$(ubs_msg NOTIFY_TTS_BUILD_COMPLETE)" 2>/dev/null || true
   osascript \
     -e 'on run argv' \
-    -e 'display notification (item 1 of argv) with title "✅ Build Finished" subtitle (item 2 of argv)' \
+    -e 'display notification (item 1 of argv) with title (item 3 of argv) subtitle (item 2 of argv)' \
     -e 'end run' \
     "$(ubs_msg NOTIFY_BUILD_DONE "$NEW_VERSION" "$BUILD_ELAPSED_FMT")" \
-    "$ARTIFACT_LABEL is ready" 2>/dev/null || true
+    "$(ubs_msg NOTIFY_SUBTITLE_ARTIFACT_READY "$ARTIFACT_LABEL")" \
+    "✅ $(ubs_msg NOTIFY_TITLE_BUILD_FINISHED)" 2>/dev/null || true
 fi
 
 echo -e "------------------------------------------------------------"

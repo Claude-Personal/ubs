@@ -49,6 +49,12 @@ curl -fsSL https://raw.githubusercontent.com/Loop-Suite/Universal-Build-Script/m
 
 安装器默认使用不可变的 current release ref。可配置 `UBS_INSTALL_REF`、`UBS_JOBS`、`UBS_INSTALL_MODE`、`UBS_MANAGE_GITIGNORE`、`UBS_GRADLE_FLAGS` 和 `UBS_GRADLE_OPTIMIZE`。
 
+CLI 输出语言可通过 `UBS_LANG` 切换。优先级为 `UBS_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG`，默认 `en`；支持的语言为 `ko`、`en`、`ja`、`zh`。
+
+```bash
+UBS_LANG=ja ./build.sh detect
+```
+
 构建指定产物并生成结构化报告：
 
 ```bash
