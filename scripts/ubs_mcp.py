@@ -15,6 +15,9 @@ import subprocess
 import sys
 from typing import Dict, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import t
+
 
 RUNTIME_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = RUNTIME_ROOT / "build.sh"
@@ -233,7 +236,7 @@ def serve() -> int:
         except json.JSONDecodeError as error:
             result = response(None, error={"code": -32700, "message": f"Parse error: {error.msg}"})
         except Exception as error:  # keep the stdio session alive on unexpected tool errors
-            print(f"MCP server error: {error}", file=sys.stderr)
+            print(t("MCP_SERVER_ERROR", error=error), file=sys.stderr)
             result = response(None, error={"code": -32603, "message": "Internal error"})
         if result is not None:
             sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")

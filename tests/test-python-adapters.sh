@@ -67,7 +67,7 @@ assert all(item["options"]["jobs"] == 1 for item in items)
 assert all(item["options"]["install_mode"] == "auto" for item in items)
 assert all(item["options"]["package_manager"] == "npm" for item in items)
 '
-PARALLEL_DRY_RUN="$("$ROOT/build.sh" build --all --dry-run --jobs 2 "$FIXTURE/mono")"
+PARALLEL_DRY_RUN="$(UBS_LANG=ko "$ROOT/build.sh" build --all --dry-run --jobs 2 "$FIXTURE/mono")"
 printf '%s\n' "$PARALLEL_DRY_RUN" | grep -Fq '전체: 2' || {
   echo "병렬 dry-run 프로젝트 집합이 계획과 다릅니다." >&2
   exit 1

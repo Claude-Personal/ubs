@@ -32,6 +32,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from i18n import t
+
 
 RUNTIME_ROOT = Path(__file__).resolve().parent.parent
 EXCLUDED_DIRS = {
@@ -95,42 +98,7 @@ def configure_standard_streams(
 configure_standard_streams()
 
 
-USAGE = """Universal Build Script
-
-사용법:
-  ./build.sh                         자동 감지 + 안전한 기본값으로 무인 빌드
-  ./build.sh detect [경로]           하위 프로젝트 탐색
-  ./build.sh detect --json [경로]    AI/MCP용 감지 결과 JSON
-  ./build.sh audit [경로]            최적화·난독화 설정 감사
-  ./build.sh audit --json [경로]     AI/MCP용 감사 결과 JSON
-  ./build.sh plan [경로]             읽기 전용 빌드 계획
-  ./build.sh plan --json [경로]      AI/MCP용 빌드 계획 JSON
-  ./build.sh graph --json [경로]     프로젝트 의존성·위상 정렬 JSON
-  ./build.sh update --check [--json] 전체 런타임 업데이트 확인
-  ./build.sh update --dry-run        변경 파일 미리 보기
-  ./build.sh update                  검증·백업 후 안전 업데이트
-  ./build.sh update --prune-backups 30  30일 지난 업데이트 백업 삭제
-  ./build.sh --dry-run               실행할 빌드만 미리 확인
-  ./build.sh --interactive           버전과 플랫폼을 직접 선택
-  ./build.sh build --project <경로>  지정 프로젝트 빌드
-  ./build.sh build --all --type TYPE 특정 타입만 빌드
-  ./build.sh publish [--project PATH] [--track TRACK]  기존 스토어 산출물 업로드
-
-주요 옵션:
-  --version-bump none|build|patch|minor|major
-  --flutter-platform auto|all|ios|android
-  --flutter-outputs auto|appbundle,apk,ipa,web
-  --clean | --skip-clean
-  --obfuscate-js | --no-obfuscate-js  Tauri 프런트엔드 JS 난독화 (첫 Tauri 빌드에서 기본값을 물어봄)
-  --publish | --no-publish            빌드 성공 후 스토어 업로드 강제/비활성화
-  --fail-fast
-  --jobs N                            독립 프로젝트 제한 병렬 빌드
-  --report-json <파일>               실제 빌드 결과 JSON 저장
-
-지원 타입:
-  tauri, flutter, android, kotlin-multiplatform, kotlin, gradle,
-  react, next, node, ios-xcode
-"""
+USAGE = t("USAGE_TEXT")
 
 
 @dataclass(frozen=True)
@@ -386,16 +354,16 @@ def run_command(command: Sequence[str], directory: Path, environment: Dict[str, 
 
 def install_node_dependencies(workspace: Path, manager: str, environment: Dict[str, str]) -> int:
     if environment.get("UBS_SKIP_INSTALL", "false") == "true":
-        print(f"{CYAN}Node 의존성 설치를 건너뜁니다 (UBS_SKIP_INSTALL=true).{NC}")
+        print(f"{CYAN}{t('NODE_SKIP_INSTALL')}{NC}")
         return 0
     mode = environment.get("UBS_INSTALL_MODE", "auto")
     if mode not in {"auto", "always"}:
-        eprint(f"{RED}UBS_INSTALL_MODE은 auto 또는 always여야 합니다: {mode}{NC}")
+        eprint(f"{RED}{t('NODE_INSTALL_MODE_INVALID', mode=mode)}{NC}")
         return 2
     stamp = workspace / "node_modules" / ".ubs-install-sha256"
     expected = dependency_digest(workspace, manager, environment)
     if mode == "auto" and read_text(stamp).strip() == expected:
-        print(f"{CYAN}의존성 입력이 변경되지 않아 {manager} install을 생략합니다.{NC}")
+        print(f"{CYAN}{t('NODE_INSTALL_SKIP_UNCHANGED', manager=manager)}{NC}")
         return 0
     status = run_command(node_install_command(workspace, manager), workspace, environment)
     if status == 0:
@@ -408,18 +376,18 @@ def run_node_adapter(directory: Path, environment: Dict[str, str]) -> int:
     workspace = node_workspace_root(directory)
     manager = detect_node_package_manager(directory)
     if shutil.which(manager, path=environment.get("PATH")) is None:
-        eprint(f"{RED}{manager} 패키지 매니저가 필요합니다.{NC}")
+        eprint(f"{RED}{t('NODE_MANAGER_REQUIRED', manager=manager)}{NC}")
         return 1
     script = environment.get("UBS_NODE_BUILD_SCRIPT", "build")
     started = time.monotonic()
-    print(f"{CYAN}Node 프로젝트 빌드 ({manager}, script={script}){NC}")
+    print(f"{CYAN}{t('NODE_BUILD_START', manager=manager, script=script)}{NC}")
     if workspace != directory:
-        print(f"{CYAN}Node workspace root: {workspace}{NC}")
+        print(f"{CYAN}{t('NODE_WORKSPACE_ROOT', workspace=workspace)}{NC}")
     status = install_node_dependencies(workspace, manager, environment)
     if status == 0:
         status = run_command([manager, "run", script], directory, environment)
     if status == 0:
-        print(f"{GREEN}Node 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+        print(f"{GREEN}{t('NODE_BUILD_DONE', seconds=int(time.monotonic() - started))}{NC}")
     return status
 
 
@@ -466,14 +434,14 @@ def resolved_gradle_arguments(kind: str, directory: Path, environment: Dict[str,
 def run_gradle_adapter(kind: str, directory: Path, environment: Dict[str, str]) -> int:
     command = gradle_command(directory)
     if not command:
-        eprint(f"{RED}Gradle Wrapper 또는 gradle 명령이 필요합니다.{NC}")
+        eprint(f"{RED}{t('GRADLE_COMMAND_REQUIRED')}{NC}")
         return 1
     full_command = [*command, *resolved_gradle_arguments(kind, directory, environment)]
     started = time.monotonic()
-    print(f"{CYAN}Gradle 프로젝트 빌드: {' '.join(full_command)}{NC}")
+    print(f"{CYAN}{t('GRADLE_BUILD_START', command=' '.join(full_command))}{NC}")
     status = run_command(full_command, directory, environment)
     if status == 0:
-        print(f"{GREEN}Gradle 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+        print(f"{GREEN}{t('GRADLE_BUILD_DONE', seconds=int(time.monotonic() - started))}{NC}")
     return status
 
 
@@ -494,7 +462,7 @@ def xcode_container(directory: Path) -> Optional[tuple[str, Path]]:
 def xcode_selection_arguments(directory: Path) -> List[str]:
     container = xcode_container(directory)
     if not container:
-        raise ValueError(f"Xcode workspace/project를 찾을 수 없습니다: {directory}")
+        raise ValueError(t("XCODE_CONTAINER_NOT_FOUND", directory=directory))
     kind, path = container
     return [f"-{kind}", str(path)]
 
@@ -510,11 +478,11 @@ def discover_xcode_scheme(
         check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
-        raise ValueError("Xcode scheme 자동 감지에 실패했습니다. UBS_XCODE_SCHEME을 지정하세요.")
+        raise ValueError(t("XCODE_SCHEME_AUTODETECT_FAILED"))
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as error:
-        raise ValueError("xcodebuild -list JSON을 해석할 수 없습니다.") from error
+        raise ValueError(t("XCODE_LIST_JSON_PARSE_FAILED")) from error
     schemes: List[str] = []
     for section in ("workspace", "project"):
         value = data.get(section)
@@ -528,10 +496,8 @@ def discover_xcode_scheme(
     if expected in schemes:
         return expected
     if not schemes:
-        raise ValueError("공유 Xcode scheme을 찾지 못했습니다. UBS_XCODE_SCHEME을 지정하세요.")
-    raise ValueError(
-        f"Xcode scheme이 여러 개입니다: {', '.join(schemes)}. UBS_XCODE_SCHEME을 지정하세요."
-    )
+        raise ValueError(t("XCODE_SCHEME_NOT_FOUND"))
+    raise ValueError(t("XCODE_SCHEME_AMBIGUOUS", schemes=", ".join(schemes)))
 
 
 def xcode_plan(directory: Path, environment: Dict[str, str]) -> dict:
@@ -572,11 +538,11 @@ def xcode_plan(directory: Path, environment: Dict[str, str]) -> dict:
 
 def run_xcode_adapter(directory: Path, environment: Dict[str, str]) -> int:
     if platform.system() != "Darwin":
-        eprint(f"{RED}Xcode iOS 빌드는 macOS에서만 실행할 수 있습니다.{NC}")
+        eprint(f"{RED}{t('XCODE_MACOS_ONLY')}{NC}")
         return 1
     executable = shutil.which("xcodebuild", path=environment.get("PATH"))
     if not executable:
-        eprint(f"{RED}xcodebuild를 찾을 수 없습니다. Xcode Command Line Tools가 필요합니다.{NC}")
+        eprint(f"{RED}{t('XCODEBUILD_NOT_FOUND')}{NC}")
         return 1
     try:
         plan = xcode_plan(directory, environment)
@@ -593,14 +559,14 @@ def run_xcode_adapter(directory: Path, environment: Dict[str, str]) -> int:
         "-archivePath", str(archive_path), *plan["flags"], "archive",
     ]
     started = time.monotonic()
-    print(f"{CYAN}Xcode archive 빌드: {' '.join(command)}{NC}")
+    print(f"{CYAN}{t('XCODE_ARCHIVE_START', command=' '.join(command))}{NC}")
     status = run_command(command, directory, environment)
     if status != 0:
         return status
     if plan["export"]:
         export_options = Path(str(plan["export_options"]))
         if not export_options.is_file():
-            eprint(f"{RED}ExportOptions.plist를 찾을 수 없습니다: {export_options}{NC}")
+            eprint(f"{RED}{t('XCODE_EXPORT_OPTIONS_MISSING', path=export_options)}{NC}")
             return 2
         export_path = Path(str(plan["export_path"]))
         export_path.mkdir(parents=True, exist_ok=True)
@@ -610,7 +576,7 @@ def run_xcode_adapter(directory: Path, environment: Dict[str, str]) -> int:
         ]
         status = run_command(export_command, directory, environment)
     if status == 0:
-        print(f"{GREEN}Xcode 빌드 완료 ({int(time.monotonic() - started)}s){NC}")
+        print(f"{GREEN}{t('XCODE_BUILD_DONE', seconds=int(time.monotonic() - started))}{NC}")
     return status
 
 
@@ -621,7 +587,7 @@ def run_python_adapter(kind: str, directory: Path, environment: Dict[str, str]) 
         return run_gradle_adapter(kind, directory, environment)
     if kind == "ios-xcode":
         return run_xcode_adapter(directory, environment)
-    raise ValueError(f"Python adapter가 지원하지 않는 타입입니다: {kind}")
+    raise ValueError(t("ADAPTER_TYPE_UNSUPPORTED", kind=kind))
 
 
 @lru_cache(maxsize=512)
@@ -762,67 +728,67 @@ def audit_project(project: Project) -> List[dict]:
     add = lambda category, check, status, detail: items.append(
         audit_item(project, category, check, status, detail))
     if kind == "flutter":
-        add("optimization", "release-build", "enforced", "선택한 모든 출력에 release 빌드와 icon tree shaking을 적용")
-        add("obfuscation", "native-symbols", "enforced", "AAB/APK/IPA에 --obfuscate와 --split-debug-info 적용")
-        add("obfuscation", "web", "not-supported", "Flutter web은 최적화 빌드지만 Dart --obfuscate 대상이 아님")
+        add("optimization", "release-build", "enforced", t("AUDIT_FLUTTER_RELEASE_TREESHAKE"))
+        add("obfuscation", "native-symbols", "enforced", t("AUDIT_FLUTTER_OBFUSCATE"))
+        add("obfuscation", "web", "not-supported", t("AUDIT_FLUTTER_WEB_NOT_SUPPORTED"))
     elif kind == "tauri":
         cargo = read_text(directory / "src-tauri" / "Cargo.toml")
         package = read_text(directory / "package.json")
         if re.search(r"^\s*lto\s*=\s*(true|\"thin\"|\"fat\")", cargo, re.MULTILINE):
-            add("optimization", "rust-lto", "configured", "Cargo release LTO 설정 감지")
+            add("optimization", "rust-lto", "configured", t("AUDIT_RUST_LTO_CONFIGURED"))
         else:
-            add("optimization", "rust-lto", "recommended", "Cargo.toml release profile의 lto 설정을 검토")
+            add("optimization", "rust-lto", "recommended", t("AUDIT_RUST_LTO_RECOMMENDED"))
         if re.search(r"^\s*strip\s*=\s*(true|\"symbols\"|\"debuginfo\")", cargo, re.MULTILINE):
-            add("optimization", "rust-strip", "configured", "Rust strip 설정 감지")
+            add("optimization", "rust-strip", "configured", t("AUDIT_RUST_STRIP_CONFIGURED"))
         else:
-            add("optimization", "rust-strip", "recommended", "배포 바이너리의 strip 설정을 검토")
+            add("optimization", "rust-strip", "recommended", t("AUDIT_RUST_STRIP_RECOMMENDED"))
         if re.search(r'"(vite|next|react-scripts)"\s*:', package):
-            add("optimization", "frontend-minify", "framework-default", "프런트엔드 도구의 production minify/tree-shaking에 위임")
+            add("optimization", "frontend-minify", "framework-default", t("AUDIT_FRONTEND_MINIFY_FRAMEWORK"))
         else:
-            add("optimization", "frontend-minify", "unknown", "프런트엔드 build script의 minify 설정을 수동 확인")
+            add("optimization", "frontend-minify", "unknown", t("AUDIT_FRONTEND_MINIFY_UNKNOWN"))
         env_macos = read_text(directory / ".env.macos")
         obfuscate = os.environ.get("TAURI_OBFUSCATE_JS", "false") == "true" or bool(
             re.search(r"^TAURI_OBFUSCATE_JS\s*=\s*['\"]?true", env_macos, re.MULTILINE))
         if obfuscate:
-            add("obfuscation", "frontend-js", "configured", "javascript-obfuscator 활성화 감지")
+            add("obfuscation", "frontend-js", "configured", t("AUDIT_JS_OBFUSCATE_CONFIGURED"))
         else:
-            add("obfuscation", "frontend-js", "optional-off", "기본 minify만 적용; 추가 JS 난독화는 꺼져 있음")
-        add("obfuscation", "rust-native", "compiled", "Rust는 release 네이티브 바이너리로 컴파일되며 난독화와 동일 개념은 아님")
+            add("obfuscation", "frontend-js", "optional-off", t("AUDIT_JS_OBFUSCATE_OFF"))
+        add("obfuscation", "rust-native", "compiled", t("AUDIT_RUST_NATIVE_COMPILED"))
     elif kind == "android":
         configured = contains_gradle(directory, r"(isMinifyEnabled|minifyEnabled)[\s=]+true")
         add("optimization", "android-minify", "configured" if configured else "not-configured",
-            "release minify/R8 활성화 감지" if configured else "release minifyEnabled/isMinifyEnabled=true를 확인하지 못함")
+            t("AUDIT_ANDROID_MINIFY_CONFIGURED") if configured else t("AUDIT_ANDROID_MINIFY_NOT_CONFIGURED"))
         configured = contains_gradle(directory, r"(isShrinkResources|shrinkResources)[\s=]+true")
         add("optimization", "resource-shrinking", "configured" if configured else "not-configured",
-            "Android resource shrinking 활성화 감지" if configured else "release shrinkResources/isShrinkResources=true를 확인하지 못함")
+            t("AUDIT_ANDROID_SHRINK_CONFIGURED") if configured else t("AUDIT_ANDROID_SHRINK_NOT_CONFIGURED"))
         configured = contains_gradle(directory, r"proguardFiles|proguardFile")
         add("obfuscation", "r8-rules", "configured" if configured else "not-configured",
-            "ProGuard/R8 규칙 연결 감지" if configured else "ProGuard/R8 규칙 연결을 확인하지 못함")
+            t("AUDIT_ANDROID_R8_CONFIGURED") if configured else t("AUDIT_ANDROID_R8_NOT_CONFIGURED"))
     elif kind in {"kotlin", "kotlin-multiplatform", "gradle"}:
-        add("optimization", "gradle-release", "project-specific", "기본 build task를 실행하며 최적화 수준은 Gradle 프로젝트 설정에 따름")
+        add("optimization", "gradle-release", "project-specific", t("AUDIT_GRADLE_RELEASE_PROJECT_SPECIFIC"))
         configured = contains_gradle(directory, r"proguard|r8|shadowJar|com\.github\.jengelman\.gradle\.plugins\.shadow")
         add("obfuscation", "jvm-obfuscation", "configured" if configured else "not-configured",
-            "축소/난독화 관련 Gradle 설정 감지" if configured else "일반 Kotlin/JVM build는 자동 난독화를 보장하지 않음")
+            t("AUDIT_JVM_OBFUSCATE_CONFIGURED") if configured else t("AUDIT_JVM_OBFUSCATE_NOT_CONFIGURED"))
     elif kind in {"react", "next", "node"}:
         package = read_text(directory / "package.json")
         framework = bool(re.search(r'"(vite|next|react-scripts)"\s*:', package))
         add("optimization", "production-bundle", "framework-default" if framework else "unknown",
-            "production build 도구의 minify/tree-shaking에 위임" if framework else "scripts.build가 최적화 빌드인지 수동 확인")
+            t("AUDIT_NODE_BUNDLE_FRAMEWORK") if framework else t("AUDIT_NODE_BUNDLE_UNKNOWN"))
         configured = bool(re.search(r"javascript-obfuscator|webpack-obfuscator|rollup-plugin-obfuscator", package))
         add("obfuscation", "javascript", "configured" if configured else "not-configured",
-            "JS 난독화 패키지 감지" if configured else "minification은 난독화 보장이 아니며 별도 난독화 설정을 확인하지 못함")
+            t("AUDIT_NODE_JS_OBFUSCATE_CONFIGURED") if configured else t("AUDIT_NODE_JS_OBFUSCATE_NOT_CONFIGURED"))
     elif kind == "ios-xcode":
         project_settings = "\n".join(
             read_text(path) for path in directory.glob("*.xcodeproj/project.pbxproj")
         )
         optimized = bool(re.search(r"SWIFT_OPTIMIZATION_LEVEL\s*=\s*(-O|-Osize|-Ounchecked)", project_settings))
         stripped = bool(re.search(r"STRIP_INSTALLED_PRODUCT\s*=\s*YES", project_settings))
-        add("optimization", "release-archive", "enforced", "Release configuration으로 xcodebuild archive 실행")
+        add("optimization", "release-archive", "enforced", t("AUDIT_XCODE_RELEASE_ARCHIVE"))
         add("optimization", "swift-optimization", "configured" if optimized else "project-default",
-            "Swift 최적화 레벨 감지" if optimized else "Release 기본값 또는 프로젝트 설정에 따름")
+            t("AUDIT_XCODE_SWIFT_OPT_CONFIGURED") if optimized else t("AUDIT_XCODE_SWIFT_OPT_DEFAULT"))
         add("obfuscation", "native-symbol-strip", "configured" if stripped else "project-default",
-            "설치 제품 symbol strip 감지" if stripped else "Xcode Release 기본 strip 설정을 확인")
-        add("obfuscation", "swift-native", "compiled", "Swift/Objective-C 네이티브 컴파일은 별도 난독화 보장이 아님")
+            t("AUDIT_XCODE_SYMBOL_STRIP_CONFIGURED") if stripped else t("AUDIT_XCODE_SYMBOL_STRIP_DEFAULT"))
+        add("obfuscation", "swift-native", "compiled", t("AUDIT_XCODE_NATIVE_COMPILED"))
     return items
 
 
@@ -955,16 +921,16 @@ def publish_apple(
     artifact: Path, project: Project, environment: Dict[str, str],
 ) -> int:
     if platform.system() != "Darwin":
-        eprint(f"{RED}App Store Connect 업로드는 macOS에서만 실행할 수 있습니다.{NC}")
+        eprint(f"{RED}{t('ASC_MACOS_ONLY')}{NC}")
         return 1
     required = ("ASC_API_KEY_ID", "ASC_API_ISSUER_ID", "ASC_APPLE_ID", "ASC_BUNDLE_ID")
     missing = [key for key in required if not environment.get(key)]
     if missing:
-        eprint(f"{RED}App Store Connect 환경변수가 없습니다: {', '.join(missing)}{NC}")
+        eprint(f"{RED}{t('ASC_ENV_MISSING', missing=', '.join(missing))}{NC}")
         return 1
     suffix = artifact.suffix.lower()
     if suffix not in {".ipa", ".pkg"}:
-        eprint(f"{RED}App Store Connect에서 지원하지 않는 산출물입니다: {artifact}{NC}")
+        eprint(f"{RED}{t('ASC_UNSUPPORTED_ARTIFACT', artifact=artifact)}{NC}")
         return 1
     bundle_version, short_version = project_bundle_versions(project, environment)
     missing_versions = []
@@ -973,12 +939,11 @@ def publish_apple(
     if not short_version:
         missing_versions.append("ASC_BUNDLE_SHORT_VERSION")
     if missing_versions:
-        eprint(f"{RED}앱 버전을 확인할 수 없습니다. 환경변수를 설정하세요: {', '.join(missing_versions)}{NC}")
+        eprint(f"{RED}{t('ASC_VERSION_MISSING', missing=', '.join(missing_versions))}{NC}")
         return 1
     kind = "ios" if suffix == ".ipa" else "macos"
     print(
-        f"{CYAN}스토어 업로드: {artifact} → App Store Connect 앱 "
-        f"{environment['ASC_APPLE_ID']} ({environment['ASC_BUNDLE_ID']}){NC}"
+        f"{CYAN}{t('ASC_UPLOAD_START', artifact=artifact, apple_id=environment['ASC_APPLE_ID'], bundle_id=environment['ASC_BUNDLE_ID'])}{NC}"
     )
     command = [
         "xcrun", "altool", "--upload-package", str(artifact),
@@ -993,7 +958,7 @@ def publish_apple(
     try:
         result = subprocess.run(command, capture_output=True, text=True)
     except OSError as error:
-        eprint(f"{RED}altool을 실행할 수 없습니다: {error}{NC}")
+        eprint(f"{RED}{t('ASC_ALTOOL_EXEC_FAILED', error=error)}{NC}")
         return 1
     if result.stdout:
         sys.stdout.write(result.stdout)
@@ -1010,7 +975,7 @@ def build_google_jwt(service_account: dict, now: int) -> str:
     required = ("private_key", "private_key_id", "client_email")
     missing = [key for key in required if not service_account.get(key)]
     if missing:
-        raise ValueError(f"서비스 계정 JSON 필드가 없습니다: {', '.join(missing)}")
+        raise ValueError(t("SERVICE_ACCOUNT_FIELDS_MISSING", missing=", ".join(missing)))
     header = {"alg": "RS256", "typ": "JWT", "kid": service_account["private_key_id"]}
     claims = {
         "iss": service_account["client_email"],
@@ -1039,10 +1004,10 @@ def build_google_jwt(service_account: dict, now: int) -> str:
                 stderr=subprocess.PIPE, check=False,
             )
         except OSError as error:
-            raise ValueError(f"openssl을 실행할 수 없습니다: {error}") from error
+            raise ValueError(t("OPENSSL_EXEC_FAILED", error=error)) from error
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", errors="replace")
-            raise ValueError(f"Google JWT RSA 서명에 실패했습니다: {detail}")
+            raise ValueError(t("JWT_SIGN_FAILED", detail=detail))
         return b".".join((*encoded, base64url(result.stdout))).decode("ascii")
     finally:
         try:
@@ -1070,7 +1035,7 @@ def google_request(
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {error.code} {method} {url}: {detail}") from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"네트워크 오류 {method} {url}: {error.reason}") from error
+        raise RuntimeError(t("NETWORK_ERROR", method=method, url=url, reason=error.reason)) from error
 
 
 def google_json_request(
@@ -1083,9 +1048,9 @@ def google_json_request(
     try:
         value = json.loads(raw or b"{}")
     except json.JSONDecodeError as error:
-        raise RuntimeError(f"Google API 응답 JSON을 해석할 수 없습니다: {raw.decode(errors='replace')}") from error
+        raise RuntimeError(t("GOOGLE_API_JSON_PARSE_FAILED", raw=raw.decode(errors='replace'))) from error
     if not isinstance(value, dict):
-        raise RuntimeError("Google API 응답 형식이 올바르지 않습니다.")
+        raise RuntimeError(t("GOOGLE_API_RESPONSE_INVALID"))
     return value, response_headers
 
 
@@ -1096,23 +1061,23 @@ def publish_google_play(
     required = ("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "GOOGLE_PLAY_PACKAGE_NAME")
     missing = [key for key in required if not environment.get(key)]
     if missing:
-        eprint(f"{RED}Google Play 환경변수가 없습니다: {', '.join(missing)}{NC}")
+        eprint(f"{RED}{t('PLAY_ENV_MISSING', missing=', '.join(missing))}{NC}")
         return 1
     track = environment.get("GOOGLE_PLAY_TRACK", "internal")
     if track not in {"internal", "alpha", "beta", "production"}:
-        eprint(f"{RED}잘못된 Google Play 트랙: {track}{NC}")
+        eprint(f"{RED}{t('PLAY_INVALID_TRACK', track=track)}{NC}")
         return 1
     account_path = Path(environment["GOOGLE_PLAY_SERVICE_ACCOUNT_JSON"]).expanduser()
     try:
         service_account = json.loads(account_path.read_text(encoding="utf-8"))
         if not isinstance(service_account, dict):
-            raise ValueError("JSON 최상위 값이 객체가 아닙니다.")
+            raise ValueError(t("JSON_TOP_LEVEL_NOT_OBJECT"))
         jwt = build_google_jwt(service_account, int(time.time()))
     except (OSError, json.JSONDecodeError, ValueError) as error:
-        eprint(f"{RED}Google Play 서비스 계정을 읽을 수 없습니다: {error}{NC}")
+        eprint(f"{RED}{t('PLAY_SERVICE_ACCOUNT_READ_FAILED', error=error)}{NC}")
         return 1
     package = environment["GOOGLE_PLAY_PACKAGE_NAME"]
-    print(f"{CYAN}스토어 업로드: {artifact} → Google Play 앱 {package}, 트랙 {track}{NC}")
+    print(f"{CYAN}{t('PLAY_UPLOAD_START', artifact=artifact, package=package, track=track)}{NC}")
     try:
         token_body = urllib.parse.urlencode({
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -1126,11 +1091,11 @@ def publish_google_play(
             token_response = json.loads(token_raw)
         except json.JSONDecodeError as error:
             raise RuntimeError(
-                f"OAuth token 응답 JSON을 해석할 수 없습니다: {token_raw.decode(errors='replace')}"
+                t("OAUTH_TOKEN_JSON_PARSE_FAILED", raw=token_raw.decode(errors='replace'))
             ) from error
         token = token_response.get("access_token") if isinstance(token_response, dict) else None
         if not token:
-            raise RuntimeError(f"access_token이 응답에 없습니다: {token_raw.decode(errors='replace')}")
+            raise RuntimeError(t("ACCESS_TOKEN_MISSING", raw=token_raw.decode(errors='replace')))
         encoded_package = urllib.parse.quote(package, safe="")
         edits_url = (
             "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/"
@@ -1139,7 +1104,7 @@ def publish_google_play(
         edit, _ = google_json_request(edits_url, "POST", token, {})
         edit_id = edit.get("id")
         if not edit_id:
-            raise RuntimeError(f"editId가 응답에 없습니다: {json.dumps(edit, ensure_ascii=False)}")
+            raise RuntimeError(t("EDIT_ID_MISSING", raw=json.dumps(edit, ensure_ascii=False)))
         encoded_edit = urllib.parse.quote(str(edit_id), safe="")
         upload_url = (
             "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/"
@@ -1151,10 +1116,10 @@ def publish_google_play(
         )
         session_url = upload_headers.get("Location")
         if not session_url:
-            raise RuntimeError("resumable 업로드 응답에 Location 헤더가 없습니다.")
+            raise RuntimeError(t("RESUMABLE_UPLOAD_LOCATION_MISSING"))
         total = artifact.stat().st_size
         if total == 0:
-            raise RuntimeError(f"빈 AAB 파일은 업로드할 수 없습니다: {artifact}")
+            raise RuntimeError(t("EMPTY_AAB_UPLOAD_REJECTED", artifact=artifact))
         uploaded: dict = {}
         chunk_size = 8 * 1024 * 1024
         start = 0
@@ -1176,7 +1141,7 @@ def publish_google_play(
                 start = end + 1
         version_code = uploaded.get("versionCode") if isinstance(uploaded, dict) else None
         if version_code is None:
-            raise RuntimeError(f"업로드 응답에 versionCode가 없습니다: {uploaded}")
+            raise RuntimeError(t("VERSION_CODE_MISSING", uploaded=uploaded))
         track_url = (
             f"{edits_url}/{encoded_edit}/tracks/"
             f"{urllib.parse.quote(track, safe='')}"
@@ -1197,10 +1162,10 @@ def publish_google_play(
         google_json_request(f"{edits_url}/{encoded_edit}:commit", "POST", token, {})
     except (OSError, json.JSONDecodeError, RuntimeError) as error:
         # TODO: Query the resumable session offset and retry from the logged byte range.
-        upload_point = f", 마지막 시도 바이트 {start}-{end}" if "start" in locals() else ""
-        eprint(f"{RED}Google Play 업로드 실패 ({artifact}{upload_point}): {error}{NC}")
+        upload_point = t("PLAY_UPLOAD_BYTE_RANGE", start=start, end=end) if "start" in locals() else ""
+        eprint(f"{RED}{t('PLAY_UPLOAD_FAILED', artifact=artifact, upload_point=upload_point, error=error)}{NC}")
         return 1
-    print(f"{GREEN}Google Play 업로드 완료: {artifact} → {track}{NC}")
+    print(f"{GREEN}{t('PLAY_UPLOAD_DONE', artifact=artifact, track=track)}{NC}")
     return 0
 
 
@@ -1210,7 +1175,7 @@ def publish_project(
     artifacts = [Path(value) for value in discover_artifacts(project)]
     publishable = [path for path in artifacts if path.suffix.lower() in {".ipa", ".pkg", ".aab"}]
     if not publishable:
-        eprint(f"{YELLOW}업로드할 스토어 산출물이 없습니다: {project.path}{NC}")
+        eprint(f"{YELLOW}{t('PUBLISH_NO_ARTIFACTS', path=project.path)}{NC}")
         return 1
     publish_environment = environment.copy()
     if options.track is not None:
@@ -1218,7 +1183,7 @@ def publish_project(
     elif publish_environment.get("GOOGLE_PLAY_TRACK") == "production" and any(
         path.suffix.lower() == ".aab" for path in publishable
     ):
-        eprint(f"{YELLOW}경고: --track production 없이 환경변수로 production 트랙이 선택되었습니다.{NC}")
+        eprint(f"{YELLOW}{t('PUBLISH_PRODUCTION_TRACK_WARNING')}{NC}")
     statuses = []
     for artifact in publishable:
         if artifact.suffix.lower() == ".aab":
@@ -1279,7 +1244,7 @@ def artifact_output_directories(project: Project) -> List[Path]:
     """Return useful folders to reveal after a successful build."""
     artifacts = [Path(value) for value in discover_artifacts(project)]
     if not artifacts:
-        eprint(f"{RED}⚠️  예상 출력 폴더를 찾을 수 없습니다: {project.path}{NC}")
+        eprint(f"{RED}⚠️  {t('OUTPUT_DIR_NOT_FOUND', path=project.path)}{NC}")
         return []
 
     selected: Set[Path] = set()
@@ -1368,7 +1333,7 @@ def open_artifact_directories(
     for directory in directories:
         command = output_open_command(directory, environment)
         if not command:
-            eprint(f"{YELLOW}결과 폴더를 열 프로그램을 찾지 못했습니다: {directory}{NC}")
+            eprint(f"{YELLOW}{t('OUTPUT_DIR_OPEN_NO_PROGRAM', directory=directory)}{NC}")
             continue
         try:
             subprocess.Popen(
@@ -1376,10 +1341,10 @@ def open_artifact_directories(
                 start_new_session=True,
             )
         except OSError as error:
-            eprint(f"{YELLOW}결과 폴더를 열지 못했습니다: {directory} ({error}){NC}")
+            eprint(f"{YELLOW}{t('OUTPUT_DIR_OPEN_FAILED', directory=directory, error=error)}{NC}")
             continue
         opened.append(str(directory))
-        print(f"{CYAN}📂 빌드 결과 폴더: {terminal_hyperlink(directory)}{NC}")
+        print(f"{CYAN}📂 {t('BUILD_OUTPUT_DIR', link=terminal_hyperlink(directory))}{NC}")
     return opened
 
 
@@ -1449,12 +1414,12 @@ def parse_options(argv: Sequence[str]) -> Options:
             elif value == "--json": options.json_output = True
             elif value == "--prune-backups":
                 index += 1
-                if index >= len(args): raise ValueError("--prune-backups 일수가 필요합니다.")
+                if index >= len(args): raise ValueError(t("PRUNE_DAYS_REQUIRED"))
                 try: options.update_prune_days = int(args[index])
-                except ValueError as error: raise ValueError("보존 일수는 0 이상의 정수여야 합니다.") from error
-                if options.update_prune_days < 0: raise ValueError("보존 일수는 0 이상의 정수여야 합니다.")
+                except ValueError as error: raise ValueError(t("RETENTION_DAYS_INVALID")) from error
+                if options.update_prune_days < 0: raise ValueError(t("RETENTION_DAYS_INVALID"))
             elif value in {"-h", "--help"}: options.command = "help"
-            else: raise ValueError(f"update에서 지원하지 않는 옵션 또는 인자입니다: {value}")
+            else: raise ValueError(t("UPDATE_ARG_UNSUPPORTED", value=value))
             index += 1
             continue
         if value == "--all": options.build_all = True
@@ -1471,7 +1436,7 @@ def parse_options(argv: Sequence[str]) -> Options:
         elif value == "--fail-fast": options.fail_fast = True
         elif value in {"--version-bump", "--flutter-platform", "--flutter-outputs", "--type", "--project", "--report-json", "--jobs", "--track"}:
             index += 1
-            if index >= len(args): raise ValueError(f"{value} 값이 필요합니다.")
+            if index >= len(args): raise ValueError(t("OPTION_VALUE_REQUIRED", option=value))
             argument = args[index]
             if value == "--version-bump": options.version_bump = argument
             elif value == "--flutter-platform": options.flutter_platform = argument
@@ -1482,9 +1447,9 @@ def parse_options(argv: Sequence[str]) -> Options:
             elif value == "--track": options.track = argument
             else:
                 try: options.jobs = int(argument)
-                except ValueError as error: raise ValueError("--jobs는 1 이상의 정수여야 합니다.") from error
+                except ValueError as error: raise ValueError(t("JOBS_INVALID")) from error
         elif value in {"-h", "--help"}: options.command = "help"
-        elif value.startswith("--"): raise ValueError(f"알 수 없는 옵션: {value}")
+        elif value.startswith("--"): raise ValueError(t("OPTION_UNKNOWN", option=value))
         else: options.root = Path(value)
         index += 1
     return options
@@ -1492,17 +1457,17 @@ def parse_options(argv: Sequence[str]) -> Options:
 
 def validate_options(options: Options) -> None:
     if options.version_bump not in {"none", "build", "patch", "minor", "major"}:
-        raise ValueError(f"잘못된 version bump: {options.version_bump}")
+        raise ValueError(t("VERSION_BUMP_INVALID_VALUE", value=options.version_bump))
     if options.flutter_platform not in {"auto", "all", "ios", "android"}:
-        raise ValueError(f"잘못된 Flutter 플랫폼: {options.flutter_platform}")
+        raise ValueError(t("FLUTTER_PLATFORM_INVALID_VALUE", value=options.flutter_platform))
     if options.flutter_outputs != "auto":
         outputs = options.flutter_outputs.split(",")
         if not outputs or any(value not in {"appbundle", "apk", "ipa", "web"} for value in outputs):
-            raise ValueError(f"잘못된 Flutter 출력: {options.flutter_outputs}")
+            raise ValueError(t("FLUTTER_OUTPUTS_INVALID_VALUE", value=options.flutter_outputs))
     if options.jobs < 1:
-        raise ValueError("--jobs는 1 이상의 정수여야 합니다.")
+        raise ValueError(t("JOBS_INVALID"))
     if options.track is not None and options.track not in {"internal", "alpha", "beta", "production"}:
-        raise ValueError(f"잘못된 Google Play 트랙: {options.track}")
+        raise ValueError(t("PLAY_TRACK_INVALID_VALUE", value=options.track))
 
 
 def selected_projects(options: Options, root: Path) -> List[Project]:
@@ -1591,28 +1556,28 @@ def explicit_dependency_entries(root: Path) -> Dict[Path, List[Path]]:
     try:
         value = json.loads(config.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise ValueError(f"ubs.dependencies.json JSON 오류: {error}") from error
+        raise ValueError(t("DEPS_JSON_ERROR", error=error)) from error
     if not isinstance(value, dict) or value.get("schema_version", 1) != 1:
-        raise ValueError("ubs.dependencies.json schema_version은 1이어야 합니다.")
+        raise ValueError(t("DEPS_SCHEMA_VERSION_INVALID"))
     dependencies = value.get("dependencies")
     if not isinstance(dependencies, dict):
-        raise ValueError("ubs.dependencies.json dependencies는 객체여야 합니다.")
+        raise ValueError(t("DEPS_NOT_OBJECT"))
 
     def resolve_inside(relative: object) -> Path:
         if not isinstance(relative, str) or not relative:
-            raise ValueError("ubs.dependencies.json 경로는 비어 있지 않은 문자열이어야 합니다.")
+            raise ValueError(t("DEPS_PATH_INVALID"))
         resolved = (root / relative).resolve()
         try:
             resolved.relative_to(root)
         except ValueError as error:
-            raise ValueError(f"의존성 경로가 루트를 벗어납니다: {relative}") from error
+            raise ValueError(t("DEPS_PATH_OUTSIDE_ROOT", relative=relative)) from error
         return resolved
 
     result: Dict[Path, List[Path]] = {}
     for source, targets in dependencies.items():
         source_path = resolve_inside(source)
         if not isinstance(targets, list):
-            raise ValueError(f"의존성 목록은 배열이어야 합니다: {source}")
+            raise ValueError(t("DEPS_LIST_NOT_ARRAY", source=source))
         result[source_path] = [resolve_inside(target) for target in targets]
     return result
 
@@ -1629,7 +1594,7 @@ def build_project_graph(projects: Sequence[Project], root: Path) -> ProjectGraph
         name = package.get("name") if package else None
         if isinstance(name, str) and name:
             if name in package_names and package_names[name] != project:
-                raise ValueError(f"중복 Node package name: {name}")
+                raise ValueError(t("NODE_PACKAGE_NAME_DUPLICATE", name=name))
             package_names[name] = project
     for project in ordered:
         package = load_package(project.path)
@@ -1655,10 +1620,7 @@ def build_project_graph(projects: Sequence[Project], root: Path) -> ProjectGraph
         for target_path in target_paths:
             target = by_path.get(target_path)
             if not target:
-                raise ValueError(
-                    f"명시한 의존 프로젝트가 선택되지 않았거나 감지되지 않았습니다: "
-                    f"{source_path} -> {target_path}"
-                )
+                raise ValueError(t("DEPENDENCY_PROJECT_NOT_SELECTED", source=source_path, target=target_path))
             if target != source:
                 dependencies[source].add(target)
     return ProjectGraph(root, ordered, dependencies)
@@ -1674,7 +1636,7 @@ def topological_layers(graph: ProjectGraph) -> List[List[Project]]:
         )
         if not ready:
             cycle = sorted(str(project.path) for project in remaining)
-            raise ValueError(f"프로젝트 의존성 순환을 감지했습니다: {', '.join(cycle)}")
+            raise ValueError(t("DEPENDENCY_CYCLE_DETECTED", cycle=", ".join(cycle)))
         layers.append(ready)
         remaining.difference_update(ready)
     return layers
@@ -1763,12 +1725,12 @@ def resolved_plan_items(projects: Sequence[Project], options: Options, root: Pat
 def run_project(project: Project, options: Options, report: BuildReport) -> int:
     adapter_relative = ADAPTERS.get(project.type)
     if not adapter_relative:
-        eprint(f"{RED}지원하지 않는 프로젝트 타입입니다: {project.type}{NC}")
+        eprint(f"{RED}{t('PROJECT_TYPE_UNSUPPORTED', type=project.type)}{NC}")
         return 1
     adapter_path = adapter_relative.split("#", 1)[0]
     adapter = RUNTIME_ROOT / adapter_path
     if not adapter.is_file():
-        eprint(f"{RED}빌드 어댑터가 없습니다: {adapter}{NC}")
+        eprint(f"{RED}{t('BUILD_ADAPTER_MISSING', adapter=adapter)}{NC}")
         return 1
     print(f"{CYAN}▶ [{project.type}] {project.path}{NC}")
     if options.dry_run:
@@ -1801,7 +1763,7 @@ def execute_projects(
     projects: Sequence[Project], options: Options, report: BuildReport, root: Path,
 ) -> int:
     if not projects:
-        eprint(f"{YELLOW}조건에 맞는 프로젝트가 없습니다.{NC}")
+        eprint(f"{YELLOW}{t('NO_MATCHING_PROJECTS')}{NC}")
         return 1
     graph = build_project_graph(projects, root)
     layers = topological_layers(graph)
@@ -1811,7 +1773,7 @@ def execute_projects(
     unavailable: Set[Project] = set()
     if options.jobs == 1 or len(projects) == 1 or options.fail_fast:
         if options.fail_fast and options.jobs > 1:
-            print(f"{YELLOW}--fail-fast에서는 결정적 중단을 위해 순차 실행합니다.{NC}")
+            print(f"{YELLOW}{t('FAIL_FAST_SEQUENTIAL')}{NC}")
         stopped = False
         for project in ordered_projects:
             blockers = graph.dependencies[project] & unavailable
@@ -1830,7 +1792,7 @@ def execute_projects(
             else:
                 failed += 1
                 unavailable.add(project)
-                eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+                eprint(f"{RED}✗ {t('BUILD_FAILED', type=project.type, path=project.path)}{NC}")
                 stopped = options.fail_fast
     else:
         all_groups = [project_groups(layer) for layer in layers]
@@ -1839,9 +1801,7 @@ def execute_projects(
             1 for groups in all_groups for group in groups if len(group) > 1
         )
         print(
-            f"{CYAN}프로젝트 {len(projects)}개를 위상 단계 {len(layers)}개, "
-            f"충돌 없는 그룹 {group_count}개로 나눠 최대 {options.jobs}개씩 병렬 실행합니다 "
-            f"(직렬 그룹 {serialized}개).{NC}"
+            f"{CYAN}{t('PARALLEL_EXECUTION_PLAN', projects=len(projects), layers=len(layers), groups=group_count, jobs=options.jobs, serial=serialized)}{NC}"
         )
 
         def run_group(group: Sequence[Project]) -> List[tuple[Project, int]]:
@@ -1859,14 +1819,14 @@ def execute_projects(
                         sorted(str(item.path) for item in blockers)
                     )
                     report.append_skipped(project, reason)
-                    eprint(f"{YELLOW}↷ 빌드 건너뜀: [{project.type}] {project.path} ({reason}){NC}")
+                    eprint(f"{YELLOW}↷ {t('BUILD_SKIPPED', type=project.type, path=project.path, reason=reason)}{NC}")
                 else:
                     runnable.append(project)
             groups = project_groups(runnable)
             if not groups:
                 continue
             workers = min(options.jobs, len(groups))
-            print(f"{CYAN}위상 단계 {level}: 프로젝트 {sum(map(len, groups))}개{NC}")
+            print(f"{CYAN}{t('TOPO_LEVEL_PROJECTS', level=level, count=sum(map(len, groups)))}{NC}")
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ubs-build") as executor:
                 futures = {executor.submit(run_group, group): group for group in groups}
                 for future in as_completed(futures):
@@ -1874,7 +1834,7 @@ def execute_projects(
                         results = future.result()
                     except Exception as error:
                         group = futures[future]
-                        eprint(f"{RED}✗ 빌드 그룹 실행 오류: {error}{NC}")
+                        eprint(f"{RED}✗ {t('BUILD_GROUP_ERROR', error=error)}{NC}")
                         results = [(project, 1) for project in group]
                     for project, status in results:
                         if status == 0:
@@ -1883,18 +1843,18 @@ def execute_projects(
                         else:
                             failed += 1
                             unavailable.add(project)
-                            eprint(f"{RED}✗ 빌드 실패: [{project.type}] {project.path}{NC}")
+                            eprint(f"{RED}✗ {t('BUILD_FAILED', type=project.type, path=project.path)}{NC}")
     skipped = max(skipped, len(projects) - succeeded - failed)
     print("------------------------------------------------------------")
     print(
-        f"전체: {len(projects)}  {GREEN}성공: {succeeded}{NC}  "
-        f"{RED}실패: {failed}{NC}  {YELLOW}건너뜀: {skipped}{NC}"
+        f"{t('BUILD_SUMMARY_TOTAL')}: {len(projects)}  {GREEN}{t('BUILD_SUMMARY_SUCCESS')}: {succeeded}{NC}  "
+        f"{RED}{t('BUILD_SUMMARY_FAILED')}: {failed}{NC}  {YELLOW}{t('BUILD_SUMMARY_SKIPPED')}: {skipped}{NC}"
     )
     if not options.dry_run:
         open_artifact_directories(successful_projects)
     if failed:
         if options.publish is not False:
-            eprint(f"{YELLOW}빌드 실패가 있어 발행 단계를 모두 건너뜁니다.{NC}")
+            eprint(f"{YELLOW}{t('PUBLISH_SKIPPED_DUE_TO_FAILURE')}{NC}")
         return 1
     if should_publish_after_build(options, root):
         return publish_projects(successful_projects, options, os.environ.copy())
@@ -1904,7 +1864,7 @@ def execute_projects(
 def run_update(options: Options) -> int:
     update_lib = RUNTIME_ROOT / "scripts/lib/update.sh"
     if not update_lib.is_file():
-        eprint(f"업데이트 모듈을 찾을 수 없습니다: {update_lib}")
+        eprint(t("UPDATE_MODULE_MISSING", path=update_lib))
         return 1
     environment = os.environ.copy()
     helper = RUNTIME_ROOT / ".ubs/bin" / ("ubs-helper.exe" if os.name == "nt" else "ubs-helper")
@@ -1920,7 +1880,7 @@ def run_update(options: Options) -> int:
             environment.setdefault("UBS_RUST_HELPER", str(helper))
     if options.update_prune_days is not None:
         if options.update_check or options.dry_run:
-            eprint("--prune-backups는 --check/--dry-run과 함께 사용할 수 없습니다.")
+            eprint(t("PRUNE_BACKUPS_INCOMPATIBLE"))
             return 2
         script = 'source "$1"; ubs_update_prune_backups "$2" "$3" "$4"'
         return subprocess.run(["bash", "-c", script, "_", str(update_lib), str(RUNTIME_ROOT),
@@ -1931,7 +1891,10 @@ def run_update(options: Options) -> int:
                str(options.update_check).lower(), str(options.dry_run).lower()]
     if not options.json_output:
         return subprocess.run(command, env=environment, check=False).returncode
-    result = subprocess.run(command, env=environment, text=True, stdout=subprocess.PIPE, check=False)
+    # Parsed below by fixed-English prefix match, so force en regardless of the
+    # user's UBS_LANG — otherwise a non-en locale silently breaks backup_path parsing.
+    json_environment = {**environment, "UBS_LANG": "en"}
+    result = subprocess.run(command, env=json_environment, text=True, stdout=subprocess.PIPE, check=False)
     mode = "check" if options.update_check else ("dry-run" if options.dry_run else "apply")
     lines = result.stdout.splitlines()
     local_version = remote_version = backup_path = None
@@ -1942,8 +1905,8 @@ def run_update(options: Options) -> int:
             local_version, remote_version = version_match.groups()
         elif line.startswith("  - "):
             changed_paths.append(line[4:])
-        elif line.startswith("백업 위치: "):
-            backup_path = line.removeprefix("백업 위치: ")
+        elif line.startswith("Backup location: "):
+            backup_path = line.removeprefix("Backup location: ")
     print(json.dumps({"schema_version": 1, "ok": result.returncode == 0,
                       "status": result.returncode, "mode": mode,
                       "local_version": local_version, "remote_version": remote_version,
@@ -1988,14 +1951,14 @@ def ask_and_remember_default(
     print(f"  {YELLOW}1) {option_1}{NC}")
     print(f"  {YELLOW}2) {option_2}{NC}")
     try:
-        chose_second = input("선택 (1-2) [1]: ").strip() == "2"
+        chose_second = input(t("CHOICE_PROMPT_1_2")).strip() == "2"
     except (EOFError, KeyboardInterrupt):
-        print(f"\n{YELLOW}입력을 받지 못해 이번만 기본값으로 진행합니다 (다음 실행에서 다시 물어봅니다).{NC}")
+        print(f"\n{YELLOW}{t('NO_INPUT_USE_DEFAULT')}{NC}")
         return non_tty_default
     value = (not chose_second) if invert else chose_second
     config[config_key] = value
     save_local_config(root, config)
-    print(f"{CYAN}ℹ️  {local_config_path(root)}에 저장했습니다. {override_hint}{NC}")
+    print(f"{CYAN}ℹ️  {t('CONFIG_SAVED', path=local_config_path(root), hint=override_hint)}{NC}")
     return value
 
 
@@ -2004,10 +1967,10 @@ def resolve_non_interactive_default(root: Path) -> bool:
     or interactive builds, then remembers the choice in .ubs/config.json."""
     return ask_and_remember_default(
         root, "non_interactive_default", non_tty_default=True,
-        header=f"{CYAN}처음 빌드네요 — 앞으로 기본 동작을 선택해주세요.{NC}",
-        option_1="무인 빌드 (기본값 자동 적용, 매번 묻지 않음)",
-        option_2="대화형 빌드 (버전·플랫폼을 매번 직접 선택)",
-        override_hint="매 실행마다 --interactive 또는 --non-interactive로 재정의할 수 있습니다.",
+        header=f"{CYAN}{t('FIRST_BUILD_HEADER')}{NC}",
+        option_1=t("NON_INTERACTIVE_OPTION_UNATTENDED"),
+        option_2=t("NON_INTERACTIVE_OPTION_INTERACTIVE"),
+        override_hint=t("NON_INTERACTIVE_OVERRIDE_HINT"),
         invert=True,
     )
 
@@ -2017,10 +1980,10 @@ def resolve_obfuscate_default(root: Path) -> bool:
     obfuscation should default on, then remembers the choice."""
     return ask_and_remember_default(
         root, "obfuscate_js_default", non_tty_default=False,
-        header=f"{CYAN}Tauri 프런트엔드 JS 난독화를 기본으로 켤까요?{NC}",
-        option_1="끄기 (기본값, 배포 전 필요할 때만 켜기)",
-        option_2="켜기 (매번 자동으로 난독화 적용)",
-        override_hint="매 실행마다 --obfuscate-js 또는 --no-obfuscate-js로 재정의할 수 있습니다.",
+        header=f"{CYAN}{t('OBFUSCATE_HEADER')}{NC}",
+        option_1=t("OBFUSCATE_OPTION_OFF"),
+        option_2=t("OBFUSCATE_OPTION_ON"),
+        override_hint=t("OBFUSCATE_OVERRIDE_HINT"),
     )
 
 
@@ -2028,10 +1991,10 @@ def resolve_publish_default(root: Path) -> bool:
     """Remember whether a real-terminal build should offer a publish prompt."""
     return ask_and_remember_default(
         root, "publish_default", non_tty_default=False,
-        header=f"{CYAN}빌드 성공 후 스토어 업로드는 어떻게 할까요?{NC}",
-        option_1="안 함 (매번 ./build.sh publish 직접 실행)",
-        option_2="빌드 성공 시마다 업로드할지 물어봄",
-        override_hint="매 실행마다 --publish 또는 --no-publish로 재정의할 수 있습니다.",
+        header=f"{CYAN}{t('PUBLISH_PROMPT_HEADER')}{NC}",
+        option_1=t("PUBLISH_PROMPT_OPTION_NONE"),
+        option_2=t("PUBLISH_PROMPT_OPTION_ASK"),
+        override_hint=t("PUBLISH_PROMPT_OVERRIDE_HINT"),
     )
 
 
@@ -2045,9 +2008,9 @@ def should_publish_after_build(options: Options, root: Path) -> bool:
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
     try:
-        return input("지금 업로드할까요? (y/N) ").strip().lower() in {"y", "yes"}
+        return input(t("UPLOAD_NOW_PROMPT")).strip().lower() in {"y", "yes"}
     except (EOFError, KeyboardInterrupt):
-        print(f"\n{YELLOW}업로드를 취소했습니다.{NC}")
+        print(f"\n{YELLOW}{t('UPLOAD_CANCELLED')}{NC}")
         return False
 
 
@@ -2063,8 +2026,8 @@ def publish_projects(
             failed += 1
     print("------------------------------------------------------------")
     print(
-        f"발행 전체: {len(projects)}  {GREEN}성공: {succeeded}{NC}  "
-        f"{RED}실패: {failed}{NC}"
+        f"{t('PUBLISH_SUMMARY_TOTAL')}: {len(projects)}  {GREEN}{t('BUILD_SUMMARY_SUCCESS')}: {succeeded}{NC}  "
+        f"{RED}{t('BUILD_SUMMARY_FAILED')}: {failed}{NC}"
     )
     return 0 if failed == 0 else 1
 
@@ -2095,10 +2058,10 @@ def main(argv: Sequence[str]) -> int:
             if options.json_output:
                 print(json.dumps([{"type": item.type, "path": str(item.path)} for item in projects], ensure_ascii=False, indent=2))
             else:
-                print(f"{'TYPE':<24}  PATH")
+                print(f"{t('LABEL_TYPE'):<24}  {t('LABEL_PATH')}")
                 print(f"{'-' * 24}  ----")
                 for project in projects: print(f"{project.type:<24}  {project.path}")
-            if not projects: eprint("감지된 프로젝트가 없습니다.")
+            if not projects: eprint(t("NO_PROJECTS_DETECTED"))
             return 0 if projects else 1
         projects = selected_projects(options, root)
         if options.command == "graph":
@@ -2108,23 +2071,23 @@ def main(argv: Sequence[str]) -> int:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
             else:
                 for level, layer in enumerate(topological_layers(graph)):
-                    print(f"단계 {level}")
+                    print(t("GRAPH_LEVEL", level=level))
                     for project in layer:
                         dependencies = sorted(str(item.path) for item in graph.dependencies[project])
                         suffix = f" <- {', '.join(dependencies)}" if dependencies else ""
                         print(f"  [{project.type}] {project.path}{suffix}")
             if not projects:
-                eprint("그래프로 표시할 프로젝트가 없습니다.")
+                eprint(t("NO_PROJECTS_FOR_GRAPH"))
             return 0 if projects else 1
         if options.command == "audit":
             audits = [entry for project in projects for entry in audit_project(project)]
             if options.json_output: print(json.dumps(audits, ensure_ascii=False, indent=2))
             else:
-                print(f"{'TYPE':<22} {'CATEGORY':<14} {'CHECK':<22} {'STATUS':<18} PATH")
+                print(f"{t('LABEL_TYPE'):<22} {t('LABEL_CATEGORY'):<14} {t('LABEL_CHECK'):<22} {t('LABEL_STATUS'):<18} {t('LABEL_PATH')}")
                 for item in audits:
                     print(f"{item['type']:<22} {item['category']:<14} {item['check']:<22} {item['status']:<18} {item['path']}")
                     print(f"  {item['detail']}")
-            if not audits: eprint("감사할 프로젝트가 없습니다.")
+            if not audits: eprint(t("AUDIT_NO_PROJECTS"))
             return 0 if audits else 1
         if options.command == "plan":
             if options.json_output:
@@ -2132,29 +2095,29 @@ def main(argv: Sequence[str]) -> int:
             else:
                 report = BuildReport(None)
                 for project in projects: run_project(project, Options(**{**options.__dict__, "dry_run": True}), report)
-            if not projects: eprint("계획할 프로젝트가 없습니다.")
+            if not projects: eprint(t("PLAN_NO_PROJECTS"))
             return 0 if projects else 1
         if options.command == "publish":
             if options.json_output:
-                raise ValueError("--json은 publish 명령에서 지원하지 않습니다.")
+                raise ValueError(t("PUBLISH_JSON_UNSUPPORTED"))
             if options.project_path and not projects:
-                eprint(f"{RED}프로젝트 타입을 감지할 수 없습니다: {options.project_path}{NC}")
+                eprint(f"{RED}{t('PROJECT_TYPE_UNDETECTED', path=options.project_path)}{NC}")
                 return 1
             if not projects:
-                eprint(f"{YELLOW}발행할 프로젝트가 없습니다.{NC}")
+                eprint(f"{YELLOW}{t('PUBLISH_NO_PROJECTS')}{NC}")
                 return 1
             return publish_projects(projects, options, os.environ.copy())
         if options.json_output:
-            raise ValueError("--json은 detect, audit, plan 또는 graph 명령에서 지원합니다.")
+            raise ValueError(t("JSON_UNSUPPORTED_COMMANDS"))
         if not options.non_interactive_explicit:
             options.non_interactive = resolve_non_interactive_default(root)
         report = BuildReport(options.report_json)
         projects = selected_projects(options, root)
         if options.project_path and not projects:
-            eprint(f"{RED}프로젝트 타입을 감지할 수 없습니다: {options.project_path}{NC}")
+            eprint(f"{RED}{t('PROJECT_TYPE_UNDETECTED', path=options.project_path)}{NC}")
             return 1
         if not options.project_path and not detect_project_type(root):
-            print(f"{CYAN}현재 폴더는 모노레포 루트로 판단했습니다. 하위 프로젝트를 자동 빌드합니다.{NC}")
+            print(f"{CYAN}{t('MONOREPO_ROOT_AUTO_BUILD')}{NC}")
         if not options.obfuscate_js_explicit and any(project.type == "tauri" for project in projects):
             options.obfuscate_js = resolve_obfuscate_default(root)
         if len(projects) == 1 and not options.build_all and options.jobs == 1:
@@ -2163,7 +2126,7 @@ def main(argv: Sequence[str]) -> int:
                 open_artifact_directories(projects)
             if status != 0:
                 if options.publish is not False:
-                    eprint(f"{YELLOW}빌드 실패가 있어 발행 단계를 모두 건너뜁니다.{NC}")
+                    eprint(f"{YELLOW}{t('PUBLISH_SKIPPED_DUE_TO_FAILURE')}{NC}")
                 return status
             if should_publish_after_build(options, root):
                 return publish_projects(projects, options, os.environ.copy())
