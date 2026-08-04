@@ -1,6 +1,6 @@
 # scripts/generate-update-manifest.sh로 생성합니다. 임의 편집하지 마세요.
-version 3.8.1
-file 8366b0a6a2bd18fbaf821765e4908b8408fbafe3ba962e7d6b32b8b9e0486254 VERSION
+version 3.9.0
+file 5c0f9e710d6f59bb59980444f3dc58886fc564a0a2d8a1d534d3296be2c67da8 VERSION
 file 18c326c1924909d8857a2ac14cb318287f615840e1f07ce87b1dfbd59d4ca652 build.sh
 file 460c4f494509cb7ac9d380aa3b53c47f10d7b2b82599ea59b4ad9cc897116a17 install.sh
 file fd8bf17a2c382bdaaead6b71f368fa6e3941292e6c62e2a9f8b58792d2c604fc scripts/ubs.py
