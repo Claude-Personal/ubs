@@ -44,6 +44,12 @@ jobs:
       - name: Validate Rust helper
         run: bash tests/test-rust-helper.sh
 
+      - name: Validate Rust helper crate
+        run: |
+          cd native/ubs-helper
+          cargo fmt --all -- --check
+          cargo test --all-targets
+
       - name: Validate update manifest
         run: |
           scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
