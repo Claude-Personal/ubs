@@ -13,6 +13,7 @@ This document is grounded entirely in the current `build.sh`, `install.sh`, `scr
 - [Architecture](#architecture)
 - [CLI reference](#cli-reference)
 - [Detected project types & adapters](#detected-project-types--adapters)
+- [Build adapters in depth](#build-adapters-in-depth)
 - [Parallel builds & dependency graph](#parallel-builds--dependency-graph)
 - [Audit: optimization & obfuscation checks](#audit-optimization--obfuscation-checks)
 - [Publishing](#publishing)
@@ -175,6 +176,59 @@ UBS_NON_INTERACTIVE=true ./build.sh --all --version-bump patch --jobs 4 --report
 | `node` | `package.json` with a `build` script, no more specific framework | `ubs.py#node` |
 | `ios-xcode` | `*.xcodeproj` with no Flutter/Tauri wrapper | `ubs.py#xcode` |
 
+## Build adapters in depth
+
+### Flutter
+
+`scripts/build-flutter.sh` runs `flutter clean` (unless `UBS_SKIP_CLEAN=true`) and `flutter pub get`, then builds the requested outputs in release mode with `--obfuscate --split-debug-info --tree-shake-icons` (native Web output doesn't support Dart obfuscation). `--dart-define-from-file` is applied automatically from `.env.prod` if present, else `.env`. On success the version bump is committed to `pubspec.yaml`; if the build fails or is cancelled partway through, it's restored via an `EXIT` trap so an uncommitted diff never accumulates.
+
+```bash
+# Interactive: prompts for version bump, platform, and (first run) sequential vs concurrent
+./build.sh --type flutter
+
+# CI: non-interactive patch bump, both platforms, explicit output set
+UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=patch UBS_FLUTTER_PLATFORM=all \
+  UBS_FLUTTER_OUTPUTS=appbundle,ipa ./build.sh --type flutter
+```
+
+### Tauri
+
+`scripts/build-tauri.sh` execs into `scripts/build-tauri-macos.sh`, which runs the same build flow on every OS and layers Apple signing/packaging on top only when the host is macOS, reading `.env.macos` (plain `key=value`, never `source`d) for `TAURI_SIGN_IDENTITY`, `TAURI_INSTALLER_IDENTITY`, `TAURI_PROVISION_PROFILE`, and `TAURI_ENTITLEMENTS`. On macOS with `rustup` available it defaults to a universal `aarch64`+`x86_64` binary (`TAURI_UNIVERSAL_MACOS=false` to disable).
+
+```bash
+# Unsigned .app, with frontend JS obfuscation on for this build
+./build.sh --type tauri --obfuscate-js
+
+# Signed, notarization-ready .pkg (macOS, .env.macos must already be configured)
+UBS_TAURI_PACKAGE_MODE=signed ./build.sh --type tauri
+```
+
+### Android, Kotlin & Gradle
+
+The detected subtype (`android`, `kotlin-multiplatform`, `kotlin`, or generic `gradle`) picks the default task — `bundleRelease` on the app module for Android, `build` otherwise.
+
+```bash
+# A non-default product flavor, plus Gradle's own build cache and parallelism
+UBS_GRADLE_TASK=:app:bundleProdRelease UBS_GRADLE_OPTIMIZE=true ./build.sh --type android
+```
+
+### Xcode-only iOS
+
+For a directory with an `*.xcworkspace`/`*.xcodeproj` and no Tauri/Flutter wrapper, `ubs.py#xcode` archives a shared scheme in Release configuration.
+
+```bash
+UBS_XCODE_SCHEME=MyApp UBS_XCODE_EXPORT=true \
+  UBS_XCODE_EXPORT_OPTIONS=ExportOptions.plist ./build.sh --type ios-xcode
+```
+
+### React, Next.js & Node
+
+The `react`/`next`/`node` subtype is cosmetic — all three run the same `package.json` script (default `build`) through the detected package manager (`packageManager` field, then lock files: pnpm, Yarn, Bun, npm).
+
+```bash
+UBS_NODE_BUILD_SCRIPT=build:production ./build.sh --type node
+```
+
 ## Parallel builds & dependency graph
 
 `ubs.py` infers dependencies from Node workspace membership and matching `package.json` `name`/dependency fields, then layers them with a standard topological sort. An explicit `ubs.dependencies.json` (`{"schema_version": 1, "dependencies": {"appA": ["libB"]}}`) can declare additional edges; every referenced path must resolve to a project that was actually selected, and cycles are rejected before any build starts. `./build.sh graph --json` prints the resolved layers and edges without building anything; `--jobs N` bounds how many projects in a conflict-free group run at once via a `ThreadPoolExecutor`, one layer at a time.
@@ -265,7 +319,20 @@ UBS_LANG=ja ./build.sh detect
 curl -fsSL https://raw.githubusercontent.com/Claude-Personal/ubs/main/install.sh | bash
 ```
 
-The installer defaults to the current release's immutable Git ref. `UBS_INSTALL_REF`, `UBS_JOBS`, `UBS_INSTALL_MODE`, `UBS_MANAGE_GITIGNORE`, `UBS_GRADLE_FLAGS`, and `UBS_GRADLE_OPTIMIZE` are configurable at install time.
+The installer defaults to the current release's immutable Git ref, stages and checksum-verifies every managed file, then applies them as one transaction — see [Self-update: signed and atomic](#self-update-signed-and-atomic) for what backs that.
+
+```bash
+# Pin to a specific tagged release instead of the default latest one
+UBS_INSTALL_REF=v3.8.1 bash install.sh
+
+# Re-run to update an existing install, replacing local edits to managed files
+UBS_FORCE=true bash install.sh
+
+# Skip the installer's idempotent .gitignore block (.ubs/, .env*, signing/, key.properties, …)
+UBS_MANAGE_GITIGNORE=false bash install.sh
+```
+
+`UBS_INSTALL_REF`, `UBS_JOBS`, `UBS_INSTALL_MODE`, `UBS_MANAGE_GITIGNORE`, `UBS_GRADLE_FLAGS`, and `UBS_GRADLE_OPTIMIZE` are all configurable at install time; the first three also apply to `./build.sh update` afterward.
 
 ## License
 
