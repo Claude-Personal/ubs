@@ -185,7 +185,7 @@ class PythonCoreTests(unittest.TestCase):
                     mock.patch.object(ubs, "open_artifact_directories") as opener:
                 status = ubs.main(["build", "--non-interactive", str(root)])
             self.assertEqual(status, 0)
-            opener.assert_called_once_with([ubs.Project("node", root)])
+            opener.assert_called_once_with([ubs.Project("node", root)], build_started_at=mock.ANY)
 
     def _mock_tty(self, is_tty: bool) -> mock.Mock:
         mock_sys = mock.Mock(wraps=ubs.sys)
@@ -558,7 +558,7 @@ class PythonCoreTests(unittest.TestCase):
             projects = [ubs.Project("node", app), ubs.Project("node", core)]
             observed = []
 
-            def record(project, _options, _report):
+            def record(project, _options, _report, _build_started_at=None):
                 observed.append(project.path.name)
                 return 0
 
@@ -570,7 +570,7 @@ class PythonCoreTests(unittest.TestCase):
             self.assertEqual(observed, ["core", "app"])
             opener.assert_called_once_with([
                 ubs.Project("node", core), ubs.Project("node", app),
-            ])
+            ], build_started_at=mock.ANY)
 
     def test_xcode_adapter_archives_with_discovered_scheme(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -608,7 +608,7 @@ class PythonCoreTests(unittest.TestCase):
             projects = [ubs.Project("node", paths[name]) for name in names]
             observed = []
 
-            def record(project, _options, _report):
+            def record(project, _options, _report, _build_started_at=None):
                 observed.append(project.path.name)
                 return 1 if project.path.name == "failed-core" else 0
 
