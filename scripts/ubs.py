@@ -847,7 +847,7 @@ def plan_item(project: Project, options: Options) -> dict:
 
 
 ARTIFACT_PATTERNS = {
-    "flutter": ["build/app/outputs/bundle/release/*.aab", "build/app/outputs/flutter-apk/*.apk", "build/ios/ipa/*.ipa", "build/web"],
+    "flutter": ["build/app/outputs/bundle/release/*.aab", "build/app/outputs/flutter-apk/*.apk", "build/ios/ipa/*.ipa", "build/web", "build/macos/export/*.pkg"],
     "tauri": ["src-tauri/target/release/bundle/*/*", "signing/build/*.pkg"],
     "android": ["**/build/outputs/**/*.aab", "**/build/outputs/**/*.apk"],
     "kotlin-multiplatform": ["**/build/libs/*.jar", "**/build/bin/**/*"],
@@ -1480,11 +1480,11 @@ def parse_options(argv: Sequence[str]) -> Options:
 def validate_options(options: Options) -> None:
     if options.version_bump not in {"none", "build", "patch", "minor", "major"}:
         raise ValueError(t("VERSION_BUMP_INVALID_VALUE", value=options.version_bump))
-    if options.flutter_platform not in {"auto", "all", "ios", "android"}:
+    if options.flutter_platform not in {"auto", "all", "ios", "android", "macos"}:
         raise ValueError(t("FLUTTER_PLATFORM_INVALID_VALUE", value=options.flutter_platform))
     if options.flutter_outputs != "auto":
         outputs = options.flutter_outputs.split(",")
-        if not outputs or any(value not in {"appbundle", "apk", "ipa", "web"} for value in outputs):
+        if not outputs or any(value not in {"appbundle", "apk", "ipa", "web", "pkg"} for value in outputs):
             raise ValueError(t("FLUTTER_OUTPUTS_INVALID_VALUE", value=options.flutter_outputs))
     if options.jobs < 1:
         raise ValueError(t("JOBS_INVALID"))

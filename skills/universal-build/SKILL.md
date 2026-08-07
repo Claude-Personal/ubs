@@ -60,10 +60,10 @@ Summarize the local and remote versions, changed managed files, and backup behav
 Use an explicit Flutter output list when the requested deliverables are known:
 
 ```bash
-./build.sh --flutter-outputs appbundle,apk,ipa,web --version-bump none .
+./build.sh --flutter-outputs appbundle,apk,ipa,web,pkg --version-bump none .
 ```
 
-Available values are `appbundle`, `apk`, `ipa`, and `web`. An explicit list overrides platform auto-selection. Use `--flutter-platform auto|all|ios|android` only with the default `--flutter-outputs auto` behavior.
+Available values are `appbundle`, `apk`, `ipa`, `web`, and `pkg` (macOS App Store package, macOS host only). An explicit list overrides platform auto-selection. Use `--flutter-platform auto|all|ios|android|macos` only with the default `--flutter-outputs auto` behavior — `auto`/`all` never include `macos` on their own, it must be selected explicitly since it needs its own signing setup (`macos/ExportOptions.plist`).
 
 Use environment overrides for non-Flutter adapters only when the project requires them:
 

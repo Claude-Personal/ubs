@@ -899,8 +899,8 @@ MESSAGES: dict[str, dict[str, str]] = {
 
 주요 옵션:
   --version-bump none|build|patch|minor|major
-  --flutter-platform auto|all|ios|android
-  --flutter-outputs auto|appbundle,apk,ipa,web
+  --flutter-platform auto|all|ios|android|macos
+  --flutter-outputs auto|appbundle,apk,ipa,web,pkg
   --clean | --skip-clean
   --obfuscate-js | --no-obfuscate-js  Tauri 프런트엔드 JS 난독화 (첫 Tauri 빌드에서 기본값을 물어봄)
   --publish | --no-publish            빌드 성공 후 스토어 업로드 강제/비활성화
@@ -935,8 +935,8 @@ Usage:
 
 Main options:
   --version-bump none|build|patch|minor|major
-  --flutter-platform auto|all|ios|android
-  --flutter-outputs auto|appbundle,apk,ipa,web
+  --flutter-platform auto|all|ios|android|macos
+  --flutter-outputs auto|appbundle,apk,ipa,web,pkg
   --clean | --skip-clean
   --obfuscate-js | --no-obfuscate-js  Obfuscate the Tauri frontend JS (asked on the first Tauri build)
   --publish | --no-publish            Force/disable store upload after a successful build
@@ -971,8 +971,8 @@ Supported types:
 
 主なオプション:
   --version-bump none|build|patch|minor|major
-  --flutter-platform auto|all|ios|android
-  --flutter-outputs auto|appbundle,apk,ipa,web
+  --flutter-platform auto|all|ios|android|macos
+  --flutter-outputs auto|appbundle,apk,ipa,web,pkg
   --clean | --skip-clean
   --obfuscate-js | --no-obfuscate-js  Tauri フロントエンド JS の難読化(初回 Tauri ビルドで既定値を確認)
   --publish | --no-publish            ビルド成功後のストアアップロードを強制/無効化
@@ -1007,8 +1007,8 @@ Supported types:
 
 主要选项:
   --version-bump none|build|patch|minor|major
-  --flutter-platform auto|all|ios|android
-  --flutter-outputs auto|appbundle,apk,ipa,web
+  --flutter-platform auto|all|ios|android|macos
+  --flutter-outputs auto|appbundle,apk,ipa,web,pkg
   --clean | --skip-clean
   --obfuscate-js | --no-obfuscate-js  混淆 Tauri 前端 JS(首次 Tauri 构建时会询问默认值)
   --publish | --no-publish            强制/禁用构建成功后的商店上传

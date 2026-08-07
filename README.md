@@ -104,7 +104,7 @@ flowchart TD
 | `scripts/lib/update.sh` | Fetches the signed update manifest, verifies its ECDSA-P256 signature, downloads and hashes each managed file, stages, backs up, and atomically replaces — with `ubs_update_allowed_path` as a second, independent allow-list beyond the manifest's own signature |
 | `scripts/bootstrap-update.sh` | Minimal recovery path used only when `scripts/ubs.py` itself is missing |
 | `scripts/build-tauri.sh` / `build-tauri-macos.sh` | Tauri adapter: version bump, frontend build, optional JS obfuscation, `tauri build`, Apple codesigning/notarization-ready `.pkg` |
-| `scripts/build-flutter.sh` | Flutter adapter: version bump, platform selection (iOS/Android/both), parallel or sequential native builds, AAB/APK/IPA/Web outputs |
+| `scripts/build-flutter.sh` | Flutter adapter: version bump, platform selection (iOS/Android/both/macOS), parallel or sequential native builds, AAB/APK/IPA/PKG/Web outputs |
 | `scripts/lib/node-package-manager.sh` | Detects and drives npm/pnpm/yarn from `packageManager` + lockfile |
 | `scripts/ubs_mcp.py` | Dependency-free stdio MCP server wrapping the same core |
 | `native/ubs-helper` | Optional Rust binary: SHA-256 hashing and batch manifest verification, with a portable Python fallback when it isn't built |
@@ -135,8 +135,8 @@ flowchart TD
 | Option | Values | Purpose |
 |---|---|---|
 | `--version-bump` | `none\|build\|patch\|minor\|major` | Non-interactive version-bump policy |
-| `--flutter-platform` | `auto\|all\|ios\|android` | Non-interactive Flutter platform selection |
-| `--flutter-outputs` | `auto\|appbundle,apk,ipa,web` (comma list) | Explicit Flutter output set |
+| `--flutter-platform` | `auto\|all\|ios\|android\|macos` | Non-interactive Flutter platform selection |
+| `--flutter-outputs` | `auto\|appbundle,apk,ipa,web,pkg` (comma list) | Explicit Flutter output set |
 | `--clean` / `--skip-clean` | flag | Force or skip pre-build cleaning |
 | `--obfuscate-js` / `--no-obfuscate-js` | flag | Tauri frontend JS obfuscation (asked once, remembered per-repo on the first Tauri build) |
 | `--publish` / `--no-publish` | flag | Force or disable store upload after a successful build |
@@ -182,6 +182,8 @@ UBS_NON_INTERACTIVE=true ./build.sh --all --version-bump patch --jobs 4 --report
 
 `scripts/build-flutter.sh` runs `flutter clean` (unless `UBS_SKIP_CLEAN=true`) and `flutter pub get`, then builds the requested outputs in release mode with `--obfuscate --split-debug-info --tree-shake-icons` (native Web output doesn't support Dart obfuscation). `--dart-define-from-file` is applied automatically from `.env.prod` if present, else `.env`. On success the version bump is committed to `pubspec.yaml`; if the build fails or is cancelled partway through, it's restored via an `EXIT` trap so an uncommitted diff never accumulates.
 
+macOS (`pkg` output, requires a macOS host) runs `flutter build macos` followed by `xcodebuild archive` + `xcodebuild -exportArchive`, since Flutter has no single command equivalent to `flutter build ipa` for the desktop target. It looks for `macos/ExportOptions.plist` in the project first (`UBS_MACOS_EXPORT_OPTIONS` to override the path), falling back to the generic `templates/flutter/ExportOptions.plist`-style template at `templates/flutter/ExportOptions-macos.plist`. Manual signing (`signingStyle=manual`) needs both `signingCertificate` and `installerSigningCertificate` set in that plist — Xcode rejects the `.pkg` export with a "doesn't include signing certificate" error otherwise, even when the `.app` itself signed fine.
+
 ```bash
 # Interactive: prompts for version bump, platform, and (first run) sequential vs concurrent
 ./build.sh --type flutter
@@ -189,6 +191,9 @@ UBS_NON_INTERACTIVE=true ./build.sh --all --version-bump patch --jobs 4 --report
 # CI: non-interactive patch bump, both platforms, explicit output set
 UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=patch UBS_FLUTTER_PLATFORM=all \
   UBS_FLUTTER_OUTPUTS=appbundle,ipa ./build.sh --type flutter
+
+# macOS App Store package only
+UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_FLUTTER_PLATFORM=macos ./build.sh --type flutter
 ```
 
 ### Tauri

@@ -216,7 +216,7 @@ CDpp7AANizXjfMqv3cvuAoiI7CSH02h0TNH4aL9+xyqsdb9P6rN1XYp5Tw==
 -----END PUBLIC KEY-----
 """
 
-VERSION = "3.9.1"
+VERSION = "3.10.0"
 REPOSITORY = "https://raw.githubusercontent.com/Claude-Personal/ubs"
 RELEASE_REF = os.environ.get("UBS_INSTALL_REF", f"v{VERSION}")
 BASE_URL = os.environ.get("UBS_INSTALL_BASE_URL", f"{REPOSITORY}/{RELEASE_REF}").rstrip("/") + "/"
@@ -240,6 +240,7 @@ MANAGED = (
     "skills/universal-build/SKILL.md", "skills/universal-build/agents/openai.yaml",
     "skills/universal-build/references/optimization.md",
     "templates/flutter/ExportOptions.plist",
+    "templates/flutter/ExportOptions-macos.plist",
 )
 
 IGNORE_BLOCK = """# BEGIN Universal Build Script
@@ -408,6 +409,7 @@ KIND_FILES: Dict[str, FrozenSet[str]] = {
     "flutter": frozenset({
         "scripts/FLUTTER_VERSION", "scripts/build-flutter.sh",
         "templates/flutter/ExportOptions.plist",
+        "templates/flutter/ExportOptions-macos.plist",
     }),
     "tauri": frozenset({
         "scripts/build-rust-helper.sh", "native/ubs-helper/Cargo.toml",
@@ -531,6 +533,11 @@ def main() -> None:
             add_change(
                 changes, "ios/ExportOptions.plist",
                 staged["templates/flutter/ExportOptions.plist"], preserve=True,
+            )
+        if (ROOT / "macos").is_dir():
+            add_change(
+                changes, "macos/ExportOptions.plist",
+                staged["templates/flutter/ExportOptions-macos.plist"], preserve=True,
             )
     if "tauri" in kinds:
         env_example = fetch(".env.macos.example")

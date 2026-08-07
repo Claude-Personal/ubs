@@ -59,7 +59,8 @@ ubs_update_allowed_path() {
     scripts/lib/i18n.sh|scripts/lib/i18n_messages.sh|\
     scripts/i18n.py|scripts/i18n_messages.py|\
     skills/universal-build/SKILL.md|skills/universal-build/agents/openai.yaml|\
-    skills/universal-build/references/optimization.md|templates/flutter/ExportOptions.plist) return 0 ;;
+    skills/universal-build/references/optimization.md|templates/flutter/ExportOptions.plist|\
+    templates/flutter/ExportOptions-macos.plist) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -95,6 +96,7 @@ skills/universal-build/SKILL.md
 skills/universal-build/agents/openai.yaml
 skills/universal-build/references/optimization.md
 templates/flutter/ExportOptions.plist
+templates/flutter/ExportOptions-macos.plist
 EOF
 }
 
