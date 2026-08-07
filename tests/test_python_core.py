@@ -54,6 +54,23 @@ class PythonCoreTests(unittest.TestCase):
                 sorted([aab_output, ipa_output, web], key=str),
             )
 
+    def test_flutter_macos_pkg_opens_its_own_export_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            aab_output = root / "build/app/outputs/bundle/release"
+            aab_output.mkdir(parents=True)
+            (aab_output / "app-release.aab").write_bytes(b"bundle")
+            pkg_output = root / "build/macos/export"
+            pkg_output.mkdir(parents=True)
+            (pkg_output / "app.pkg").write_bytes(b"pkg")
+            # macOS's .xcarchive intermediate under build/macos/ must not itself
+            # be treated as a reveal-able output — only the final export/ folder.
+            (root / "build/macos/Runner.xcarchive").mkdir(parents=True)
+            self.assertEqual(
+                ubs.artifact_output_directories(ubs.Project("flutter", root)),
+                sorted([aab_output, pkg_output], key=str),
+            )
+
     def test_flutter_single_output_opens_its_own_folder_not_whole_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

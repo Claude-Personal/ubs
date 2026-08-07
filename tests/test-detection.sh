@@ -212,6 +212,18 @@ if bash "$REPO_DIR/build.sh" --dry-run --flutter-outputs appbundle, "$FIXTURE" \
   exit 1
 fi
 
+MACOS_PLAN="$(bash "$REPO_DIR/build.sh" --dry-run --type flutter \
+  --flutter-outputs pkg "$FIXTURE")"
+printf '%s\n' "$MACOS_PLAN" | grep -Fq 'Flutter outputs=pkg' || {
+  echo "dry-run에 macOS(pkg) 출력 계획이 표시되지 않았습니다." >&2
+  exit 1
+}
+if bash "$REPO_DIR/build.sh" --dry-run --flutter-platform macos-only "$FIXTURE" \
+  >/dev/null 2>&1; then
+  echo "잘못된 --flutter-platform 값을 허용했습니다." >&2
+  exit 1
+fi
+
 # 어댑터가 생태계별 안전한 기본 명령을 선택하는지 외부 빌드 없이 검증한다.
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$UBS_TEST_LOG"' \
   > "$FIXTURE/apps/android-app/gradlew"
@@ -290,6 +302,36 @@ grep -Fq -- "--export-options-plist=$REPO_DIR/templates/flutter/ExportOptions.pl
   echo "앱 전용 plist가 없을 때 UBS Flutter 템플릿을 사용하지 않았습니다." >&2
   exit 1
 }
+
+# macOS PKG: flutter build macos에는 flutter build ipa 같은 단일 archive+export
+# 명령이 없어 xcodebuild를 직접 호출한다 — flutter뿐 아니라 xcodebuild도 스텁해서
+# 두 단계(archive, exportArchive) 순서와 인자를 검증한다.
+mkdir -p "$FIXTURE/apps/mobile/macos/Runner.xcworkspace"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  > "$FIXTURE/bin/xcodebuild"
+chmod +x "$FIXTURE/bin/xcodebuild"
+
+: > "$FIXTURE/flutter-pkg.log"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-pkg.log" \
+  UBS_RUNTIME_ROOT="$REPO_DIR" UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none \
+  UBS_FLUTTER_OUTPUTS=pkg UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fq 'build macos --release' "$FIXTURE/flutter-pkg.log" || {
+  echo "macOS PKG 빌드에서 flutter build macos가 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- '-workspace macos/Runner.xcworkspace -scheme Runner -configuration Release -archivePath build/macos/Runner.xcarchive archive' \
+  "$FIXTURE/flutter-pkg.log" || {
+  echo "macOS PKG 빌드에서 xcodebuild archive가 올바르게 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- "-exportArchive -archivePath build/macos/Runner.xcarchive -exportPath build/macos/export -exportOptionsPlist $REPO_DIR/templates/flutter/ExportOptions-macos.plist" \
+  "$FIXTURE/flutter-pkg.log" || {
+  echo "앱 전용 macOS plist가 없을 때 UBS macOS 템플릿을 사용하지 않았습니다." >&2
+  exit 1
+}
+rm -rf "$FIXTURE/apps/mobile/macos"
 
 printf '%s\n' 'version: 1.0.0+1' 'dependencies:' '  flutter:' '    sdk: flutter' \
   > "$FIXTURE/apps/mobile/pubspec.yaml"

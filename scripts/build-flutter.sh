@@ -2,7 +2,7 @@
 
 # =================================================================
 # Flutter Production Optimization Build Script
-# Description: Automated Build for Android (AAB/APK), iOS (IPA), and Web
+# Description: Automated Build for Android (AAB/APK), iOS (IPA), macOS (PKG), and Web
 # Features: Obfuscation, Tree-shaking, AOT, Smart Notifications, Auto Version Bump
 # =================================================================
 
@@ -136,10 +136,11 @@ BUILD_ANDROID=false
 BUILD_APK=false
 BUILD_IOS=false
 BUILD_WEB=false
+BUILD_MACOS=false
 CUSTOM_OUTPUTS="${UBS_FLUTTER_OUTPUTS:-auto}"
 
 if [ "$CUSTOM_OUTPUTS" != "auto" ]; then
-  if ! printf '%s\n' "$CUSTOM_OUTPUTS" | grep -Eqs '^(appbundle|apk|ipa|web)(,(appbundle|apk|ipa|web))*$'; then
+  if ! printf '%s\n' "$CUSTOM_OUTPUTS" | grep -Eqs '^(appbundle|apk|ipa|web|pkg)(,(appbundle|apk|ipa|web|pkg))*$'; then
     echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_OUTPUTS "$CUSTOM_OUTPUTS")${NC}" >&2
     exit 2
   fi
@@ -151,6 +152,7 @@ if [ "$CUSTOM_OUTPUTS" != "auto" ]; then
       apk) BUILD_APK=true ;;
       ipa) BUILD_IOS=true ;;
       web) BUILD_WEB=true ;;
+      pkg) BUILD_MACOS=true ;;
       *) echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_OUTPUTS "$output")${NC}" >&2; exit 2 ;;
     esac
   done
@@ -166,6 +168,7 @@ elif [ "${UBS_NON_INTERACTIVE:-false}" = "true" ]; then
     all) PLATFORM_CHOICE=1 ;;
     ios) PLATFORM_CHOICE=2 ;;
     android) PLATFORM_CHOICE=3 ;;
+    macos) PLATFORM_CHOICE=4 ;;
     *) echo -e "${RED}$(ubs_msg UNSUPPORTED_FLUTTER_PLATFORM)${NC}" >&2; exit 2 ;;
   esac
   echo -e "${CYAN}$(ubs_msg NONINTERACTIVE_FLUTTER_PLATFORM "${UBS_FLUTTER_PLATFORM:-auto}")${NC}"
@@ -174,8 +177,9 @@ else
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_BOTH)${NC}"
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_IOS)${NC}"
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_ANDROID)${NC}"
+  echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_PLATFORM_MACOS)${NC}"
   echo -e "  ${YELLOW}$(ubs_msg MENU_OPT_CANCEL_PLATFORM)${NC}"
-  read -p "$(ubs_msg CHOICE_PROMPT_1_4)" PLATFORM_CHOICE
+  read -p "$(ubs_msg CHOICE_PROMPT_1_5)" PLATFORM_CHOICE
 fi
 
 if [ "$CUSTOM_OUTPUTS" = "auto" ]; then
@@ -196,6 +200,12 @@ case $PLATFORM_CHOICE in
     echo -e "${GREEN}✅ $(ubs_msg PLATFORM_SELECTED_ANDROID)${NC}"
     ;;
   4)
+    BUILD_IOS=false
+    BUILD_ANDROID=false
+    BUILD_MACOS=true
+    echo -e "${GREEN}✅ $(ubs_msg PLATFORM_SELECTED_MACOS)${NC}"
+    ;;
+  5)
     echo -e "${YELLOW}$(ubs_msg BUILD_CANCELLED)${NC}"
     exit 0
     ;;
@@ -257,6 +267,7 @@ ANDROID_OUT="build/app/outputs/bundle/release"
 APK_OUT="build/app/outputs/flutter-apk"
 IOS_OUT="build/ios/ipa"
 WEB_OUT="build/web"
+MACOS_OUT="build/macos/export"
 
 # ==========================================
 # 빌드 시작
@@ -328,6 +339,41 @@ build_web() {
     --no-pub
 }
 
+build_macos() {
+  local export_options="${UBS_MACOS_EXPORT_OPTIONS:-macos/ExportOptions.plist}"
+  if [ ! -f "$export_options" ] && [ -f "${UBS_RUNTIME_ROOT:-}/templates/flutter/ExportOptions-macos.plist" ]; then
+    export_options="${UBS_RUNTIME_ROOT}/templates/flutter/ExportOptions-macos.plist"
+    echo -e "${CYAN}ℹ️  $(ubs_msg EXPORT_OPTIONS_FALLBACK)${NC}"
+  fi
+  [ -f "$export_options" ] || {
+    echo -e "${RED}❌ $(ubs_msg EXPORT_OPTIONS_NOT_FOUND_MACOS "$export_options")${NC}" >&2
+    return 1
+  }
+  [ -d "macos/Runner.xcworkspace" ] || {
+    echo -e "${RED}❌ $(ubs_msg MACOS_WORKSPACE_NOT_FOUND "macos/Runner.xcworkspace")${NC}" >&2
+    return 1
+  }
+
+  echo -e "${YELLOW}🖥️  $(ubs_msg STEP_BUILD_MACOS)${NC}"
+  # flutter build macos가 DART_DEFINES를 macos/Flutter/ephemeral/Flutter-Generated.xcconfig에
+  # 써야 그 다음 xcodebuild archive가 같은 값을 읽는다 (build_ios()의 --dart-define 주석과
+  # 같은 이유) — 이 두 단계 사이에 flutter clean을 넣지 말 것.
+  flutter build macos --release \
+    $DART_DEFINE \
+    --obfuscate \
+    --split-debug-info=build/macos/outputs/symbols \
+    --no-pub
+
+  local archive_path="build/macos/Runner.xcarchive"
+  rm -rf "$archive_path" "$MACOS_OUT"
+  xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner -configuration Release \
+    -archivePath "$archive_path" archive
+  xcodebuild -exportArchive \
+    -archivePath "$archive_path" \
+    -exportPath "$MACOS_OUT" \
+    -exportOptionsPlist "$export_options"
+}
+
 if [ "$PARALLEL_BUILD" = true ] && [ "$BUILD_ANDROID" = true ] && [ "$BUILD_IOS" = true ]; then
   echo -e "${BLUE}⏱️  $(ubs_msg PARALLEL_BUILD_START)${NC}"
   build_android &
@@ -348,6 +394,7 @@ else
 fi
 [ "$BUILD_APK" = true ] && build_apk
 [ "$BUILD_WEB" = true ] && build_web
+[ "$BUILD_MACOS" = true ] && build_macos
 BUILD_COMPLETED=true
 
 # ==========================================
@@ -397,6 +444,9 @@ if [ "$BUILD_APK" = true ]; then
 fi
 if [ "$BUILD_WEB" = true ]; then
   echo -e "📍 $(ubs_msg BUILD_SUMMARY_FLUTTER_WEB "$WEB_OUT")"
+fi
+if [ "$BUILD_MACOS" = true ]; then
+  echo -e "📍 $(ubs_msg BUILD_SUMMARY_MACOS_PKG "$MACOS_OUT")"
 fi
 if [ "$PARALLEL_BUILD" = true ]; then BUILD_MODE_LABEL="$(ubs_msg BUILD_MODE_PARALLEL)"; else BUILD_MODE_LABEL="$(ubs_msg BUILD_MODE_SEQUENTIAL)"; fi
 echo -e "⏱️  $(ubs_msg BUILD_SUMMARY_ELAPSED "$BUILD_ELAPSED_FMT" "$BUILD_MODE_LABEL")"

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Generic App Store Connect export template. Copy into a Flutter app's macos/
+         and customize if you need manual signing (signingStyle=manual requires both
+         signingCertificate and installerSigningCertificate, or xcodebuild rejects the
+         export with "doesn't include signing certificate" even though the app itself
+         is correctly signed). -->
+    <key>method</key>
+    <string>app-store</string>
+    <key>uploadSymbols</key>
+    <true/>
+</dict>
+</plist>
