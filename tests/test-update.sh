@@ -45,8 +45,9 @@ DRIFT_HASH="$(sha256_file "$TARGET/scripts/build-node.sh")"
 
 CHECK_OUTPUT="$(UBS_LANG=ko UBS_UPDATE_BASE_URL="file://$REMOTE" UBS_UPDATE_ALLOW_FILE=true \
   bash "$TARGET/build.sh" update --check)"
-printf '%s\n' "$CHECK_OUTPUT" | grep -Fq '변경 대상: 1개' || {
-  echo "update --check가 변경 파일 하나를 감지하지 못했습니다." >&2
+printf '%s\n' "$CHECK_OUTPUT" | grep -Fq 'scripts/build-node.sh' || {
+  echo "update --check가 주입한 드리프트(scripts/build-node.sh)를 감지하지 못했습니다." >&2
+  printf '%s\n' "$CHECK_OUTPUT" >&2
   exit 1
 }
 [ "$(sha256_file "$TARGET/scripts/build-node.sh")" = "$DRIFT_HASH" ] || {
