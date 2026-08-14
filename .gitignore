@@ -22,6 +22,7 @@ local.properties
 GoogleService-Info.plist
 google-services.json
 ios/ExportOptions.plist
+macos/ExportOptions.plist
 
 # Build outputs and dependency caches
 build/
