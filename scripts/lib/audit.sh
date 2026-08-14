@@ -10,8 +10,11 @@ audit_emit() {
 gradle_contains() {
   local dir="$1"
   local pattern="$2"
-  find "$dir" -maxdepth 4 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' \) \
-    -exec grep -Eqs "$pattern" {} + 2>/dev/null
+  local file
+  while IFS= read -r -d '' file; do
+    grep -Es "$pattern" "$file" 2>/dev/null | grep -qvE '^[[:space:]]*(//|\*)' && return 0
+  done < <(find "$dir" -maxdepth 4 -type f \( -name 'build.gradle' -o -name 'build.gradle.kts' \) -print0)
+  return 1
 }
 
 audit_flutter() {
