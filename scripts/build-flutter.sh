@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # =================================================================
 # Flutter Production Optimization Build Script
