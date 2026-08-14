@@ -3,6 +3,8 @@
 # One variable per key per language: UBS_MSG_<ko|en|ja|zh>_<KEY>="...".
 # Use %s placeholders for values interpolated via ubs_msg's printf-args.
 # Keep ANSI color codes and emoji OUT of these strings — call sites wrap them.
+# These are double-quoted assignments: a literal $ or backtick is expanded/executed
+# at source time. Escape them (\$, \`) if a message ever needs the literal character.
 
 # --- build.sh / bootstrap-update.sh / build-node.sh / build-gradle.sh / build-rust-helper.sh / lib/node-package-manager.sh ---
 
