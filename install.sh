@@ -528,7 +528,7 @@ def main() -> None:
         env_example = fetch(".env.example")
         add_change(changes, ".env.example", env_example, preserve=True)
         if not (ROOT / ".env").exists() and not (ROOT / ".env.prod").exists():
-            add_change(changes, ".env", env_example)
+            add_change(changes, ".env", env_example, 0o600)
         if (ROOT / "ios").is_dir():
             add_change(
                 changes, "ios/ExportOptions.plist",
