@@ -22,9 +22,6 @@ command -v openssl >/dev/null 2>&1 || { echo "openssl이 필요합니다." >&2; 
   exit 1
 }
 
-openssl dgst -sha256 -sign "$KEY" -out "$SIGNATURE" "$MANIFEST"
-echo "서명 완료: $SIGNATURE"
-
 PUBKEY="$(openssl ec -in "$KEY" -pubout 2>/dev/null)"
 EMBEDDED="$(sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' "$ROOT/scripts/lib/update.sh" |
   sed "s/^UBS_UPDATE_MANIFEST_PUBLIC_KEY='//; s/'\$//")"
@@ -32,3 +29,6 @@ if [ "$PUBKEY" != "$EMBEDDED" ]; then
   echo "경고: 이 키의 공개키가 scripts/lib/update.sh에 박힌 것과 다릅니다 — install.sh/update.sh를 먼저 갱신하세요." >&2
   exit 1
 fi
+
+openssl dgst -sha256 -sign "$KEY" -out "$SIGNATURE" "$MANIFEST"
+echo "서명 완료: $SIGNATURE"
