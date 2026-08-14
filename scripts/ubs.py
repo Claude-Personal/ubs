@@ -419,7 +419,7 @@ def split_cli_arguments(value: str, windows: Optional[bool] = None) -> List[str]
 
 def resolved_gradle_arguments(kind: str, directory: Path, environment: Dict[str, str]) -> List[str]:
     task_value = environment.get("UBS_GRADLE_TASK", "")
-    if task_value:
+    if task_value.strip():
         tasks = split_cli_arguments(task_value)
     elif kind == "android" and has_gradle_plugin(directory, "com.android.application"):
         tasks = ["bundleRelease"]
