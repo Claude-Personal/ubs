@@ -95,7 +95,10 @@ def resolve_scoped_path(value: object = ".") -> Path:
 def common_arguments(arguments: dict) -> tuple[Path, List[str]]:
     path = resolve_scoped_path(arguments.get("path", "."))
     command: List[str] = []
-    if arguments.get("all") is True:
+    all_flag = arguments.get("all", False)
+    if not isinstance(all_flag, bool):
+        raise ValueError("all must be a boolean")
+    if all_flag:
         command.append("--all")
     project_type = arguments.get("type")
     if project_type is not None:
@@ -157,7 +160,13 @@ def call_tool(name: str, arguments: object) -> dict:
         if arguments:
             raise ValueError("ubs_update_check does not accept arguments")
         status, stdout, stderr = run_ubs(["update", "--check", "--json"])
-        structured = json.loads(stdout) if status == 0 and stdout.strip() else None
+        structured = None
+        if status == 0 and stdout.strip():
+            try:
+                structured = json.loads(stdout)
+            except json.JSONDecodeError:
+                status = 1
+                stderr = f"{stderr}\nUBS returned invalid JSON".strip()
         return tool_result(status, stdout, stderr, structured)
     if name == "ubs_build" and ALLOW_BUILD:
         path, common = common_arguments(arguments)
