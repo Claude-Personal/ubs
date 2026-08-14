@@ -1,0 +1,476 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../scripts/lib/detect.sh
+source "$REPO_DIR/scripts/lib/detect.sh"
+
+FIXTURE="$(mktemp -d)"
+FIXTURE="$(canonical_dir "$FIXTURE")"
+MALFORMED_FIXTURE="$(mktemp -d)"
+MALFORMED_FIXTURE="$(canonical_dir "$MALFORMED_FIXTURE")"
+trap 'rm -rf "$FIXTURE" "$MALFORMED_FIXTURE"' EXIT
+
+mkdir -p \
+  "$FIXTURE/apps/desktop/src-tauri" \
+  "$FIXTURE/apps/mobile/android/app" \
+  "$FIXTURE/apps/android-app/app" \
+  "$FIXTURE/apps/kmp" \
+  "$FIXTURE/apps/native-ios/Demo.xcodeproj" \
+  "$FIXTURE/apps/web" \
+  "$FIXTURE/apps/ignored-node"
+
+printf '%s\n' '{"productName":"Desktop","version":"1.0.0"}' \
+  > "$FIXTURE/apps/desktop/src-tauri/tauri.conf.json"
+printf '%s\n' '[profile.release]' 'lto = "thin"' 'strip = "symbols"' \
+  > "$FIXTURE/apps/desktop/src-tauri/Cargo.toml"
+printf '%s\n' '{"scripts":{"build":"vite build"},"dependencies":{"react":"latest"}}' \
+  > "$FIXTURE/apps/desktop/package.json"
+
+printf '%s\n' 'version: 1.0.0+1' 'dependencies:' '  flutter:' '    sdk: flutter' \
+  > "$FIXTURE/apps/mobile/pubspec.yaml"
+printf '%s\n' 'pluginManagement {}' > "$FIXTURE/apps/mobile/android/settings.gradle.kts"
+printf '%s\n' 'plugins { id("com.android.application") }' \
+  > "$FIXTURE/apps/mobile/android/app/build.gradle.kts"
+
+printf '%s\n' 'pluginManagement {}' > "$FIXTURE/apps/android-app/settings.gradle.kts"
+printf '%s\n' 'plugins { id("com.android.application") }' \
+  'android { buildTypes { release { isMinifyEnabled = true; isShrinkResources = true; proguardFiles("proguard-rules.pro") } } }' \
+  > "$FIXTURE/apps/android-app/app/build.gradle.kts"
+
+printf '%s\n' 'pluginManagement {}' > "$FIXTURE/apps/kmp/settings.gradle.kts"
+printf '%s\n' 'plugins { kotlin("multiplatform") }' > "$FIXTURE/apps/kmp/build.gradle.kts"
+
+printf '%s\n' 'SWIFT_OPTIMIZATION_LEVEL = -O;' 'STRIP_INSTALLED_PRODUCT = YES;' \
+  > "$FIXTURE/apps/native-ios/Demo.xcodeproj/project.pbxproj"
+
+printf '%s\n' '{"scripts":{"build":"vite build"},"dependencies":{"react":"latest"}}' \
+  > "$FIXTURE/apps/web/package.json"
+printf '%s\n' '{"schema_version":1,"dependencies":{"apps/web":["apps/kmp"]}}' \
+  > "$FIXTURE/ubs.dependencies.json"
+printf '%s\n' '{"scripts":{"test":"node test.js"}}' \
+  > "$FIXTURE/apps/ignored-node/package.json"
+
+RESULT="$(scan_projects "$FIXTURE")"
+
+assert_line() {
+  local expected="$1"
+  if ! printf '%s\n' "$RESULT" | grep -Fqx "$expected"; then
+    echo "누락된 감지 결과: $expected" >&2
+    printf '%s\n' "$RESULT" >&2
+    exit 1
+  fi
+}
+
+assert_line "tauri"$'\t'"$FIXTURE/apps/desktop"
+assert_line "flutter"$'\t'"$FIXTURE/apps/mobile"
+assert_line "android"$'\t'"$FIXTURE/apps/android-app"
+assert_line "kotlin-multiplatform"$'\t'"$FIXTURE/apps/kmp"
+assert_line "ios-xcode"$'\t'"$FIXTURE/apps/native-ios"
+assert_line "react"$'\t'"$FIXTURE/apps/web"
+
+COUNT=$(printf '%s\n' "$RESULT" | sed '/^$/d' | wc -l | tr -d ' ')
+[ "$COUNT" -eq 6 ] || {
+  echo "프로젝트 수가 예상과 다릅니다: expected=6 actual=$COUNT" >&2
+  printf '%s\n' "$RESULT" >&2
+  exit 1
+}
+
+DETECT_JSON="$(bash "$REPO_DIR/build.sh" detect --json "$FIXTURE")"
+printf '%s' "$DETECT_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 6
+assert {item["type"] for item in items} == {"tauri", "flutter", "android", "kotlin-multiplatform", "react", "ios-xcode"}
+'
+
+# 비정상 dependency 필드가 있어도 유효한 build script는 안전하게 Node로 감지한다.
+printf '%s\n' '{"scripts":{"build":"node build.js"},"dependencies":null,"devDependencies":[]}' \
+  > "$MALFORMED_FIXTURE/package.json"
+MALFORMED_JSON="$(bash "$REPO_DIR/build.sh" detect --json "$MALFORMED_FIXTURE")"
+printf '%s' "$MALFORMED_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 1
+assert items[0]["type"] == "node"
+'
+
+AUDIT_JSON="$(bash "$REPO_DIR/build.sh" audit --json "$FIXTURE")"
+printf '%s' "$AUDIT_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert items
+by_check = {(item["type"], item["check"]): item["status"] for item in items}
+assert by_check[("flutter", "native-symbols")] == "enforced"
+assert by_check[("flutter", "web")] == "not-supported"
+assert by_check[("tauri", "rust-lto")] == "configured"
+assert by_check[("tauri", "rust-strip")] == "configured"
+assert by_check[("android", "android-minify")] == "configured"
+assert by_check[("android", "resource-shrinking")] == "configured"
+assert by_check[("android", "r8-rules")] == "configured"
+assert by_check[("react", "javascript")] == "not-configured"
+assert by_check[("ios-xcode", "release-archive")] == "enforced"
+assert by_check[("ios-xcode", "swift-optimization")] == "configured"
+'
+
+PLAN_JSON="$(bash "$REPO_DIR/build.sh" plan --json --type flutter \
+  --flutter-outputs appbundle,web "$FIXTURE")"
+printf '%s' "$PLAN_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 1
+item = items[0]
+assert item["type"] == "flutter"
+assert item["adapter"] == "scripts/build-flutter.sh"
+assert item["options"]["outputs"] == "appbundle,web"
+assert item["options"]["output_selection"] == "explicit"
+assert item["options"]["platform"] is None
+assert item["options"]["skip_clean"] is True
+assert item["options"]["version_bump"] == "none"
+'
+
+PLAN_ALL_JSON="$(UBS_SKIP_INSTALL=true TAURI_OBFUSCATE_JS=true \
+  UBS_GRADLE_TASK=assembleRelease UBS_NODE_BUILD_SCRIPT=build:production \
+  bash "$REPO_DIR/build.sh" plan --json "$FIXTURE")"
+printf '%s' "$PLAN_ALL_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 6
+by_type = {item["type"]: item for item in items}
+assert by_type["tauri"]["adapter"] == "scripts/build-tauri.sh"
+assert by_type["tauri"]["options"]["skip_install"] is True
+assert by_type["tauri"]["options"]["obfuscate_js"] is True
+assert by_type["android"]["options"]["gradle_task"] == "assembleRelease"
+assert by_type["react"]["options"]["build_script"] == "build:production"
+assert by_type["react"]["options"]["skip_install"] is True
+assert by_type["react"]["depends_on"] == [by_type["kotlin-multiplatform"]["path"]]
+assert by_type["react"]["build_order"] > by_type["kotlin-multiplatform"]["build_order"]
+assert by_type["ios-xcode"]["options"]["configuration"] == "Release"
+assert by_type["ios-xcode"]["options"]["container_type"] == "project"
+'
+
+GRAPH_JSON="$(bash "$REPO_DIR/build.sh" graph --json "$FIXTURE")"
+printf '%s' "$GRAPH_JSON" | python3 -c '
+import json, sys
+graph = json.load(sys.stdin)
+assert graph["schema_version"] == 1
+assert len(graph["nodes"]) == 6
+edge = next(item for item in graph["edges"] if item["to"].endswith("/apps/web"))
+assert edge["from"].endswith("/apps/kmp")
+assert len(graph["layers"]) == 2
+'
+
+PLAN_PROJECT_JSON="$(bash "$REPO_DIR/build.sh" plan --json \
+  --project "$FIXTURE/apps/web" "$FIXTURE")"
+printf '%s' "$PLAN_PROJECT_JSON" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+assert len(items) == 2
+by_type = {item["type"]: item for item in items}
+assert by_type["react"]["path"].endswith("/apps/web")
+assert by_type["kotlin-multiplatform"]["path"].endswith("/apps/kmp")
+assert by_type["react"]["depends_on"] == [by_type["kotlin-multiplatform"]["path"]]
+'
+
+REPORT_PATH="$FIXTURE/dry-run-report.json"
+bash "$REPO_DIR/build.sh" build --all --dry-run --report-json "$REPORT_PATH" "$FIXTURE" >/dev/null
+python3 - "$REPORT_PATH" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["schema_version"] == 1
+assert len(data["results"]) == 6
+assert all(item["status"] == "planned" for item in data["results"])
+assert all(item["artifacts"] == [] for item in data["results"])
+PY
+
+DRY_RUN="$(bash "$REPO_DIR/build.sh" build --all --dry-run "$FIXTURE")"
+DRY_COUNT=$(printf '%s\n' "$DRY_RUN" | grep -c '(dry-run)')
+[ "$DRY_COUNT" -eq 6 ] || {
+  echo "dry-run 프로젝트 수가 예상과 다릅니다: expected=6 actual=$DRY_COUNT" >&2
+  printf '%s\n' "$DRY_RUN" >&2
+  exit 1
+}
+
+AUTO_DRY_RUN="$(bash "$REPO_DIR/build.sh" --dry-run "$FIXTURE")"
+AUTO_COUNT=$(printf '%s\n' "$AUTO_DRY_RUN" | grep -c '(dry-run)')
+[ "$AUTO_COUNT" -eq 6 ] || {
+  echo "기본 명령이 모노레포 전체를 자동 선택하지 않았습니다." >&2
+  printf '%s\n' "$AUTO_DRY_RUN" >&2
+  exit 1
+}
+
+FLUTTER_PLAN="$(bash "$REPO_DIR/build.sh" --dry-run --type flutter \
+  --flutter-outputs appbundle,web "$FIXTURE")"
+printf '%s\n' "$FLUTTER_PLAN" | grep -Fq 'Flutter outputs=appbundle,web' || {
+  echo "dry-run에 Flutter 출력 계획이 표시되지 않았습니다." >&2
+  exit 1
+}
+if bash "$REPO_DIR/build.sh" --dry-run --flutter-outputs appbundle, "$FIXTURE" \
+  >/dev/null 2>&1; then
+  echo "잘못된 Flutter 출력 목록을 허용했습니다." >&2
+  exit 1
+fi
+
+MACOS_PLAN="$(bash "$REPO_DIR/build.sh" --dry-run --type flutter \
+  --flutter-outputs pkg "$FIXTURE")"
+printf '%s\n' "$MACOS_PLAN" | grep -Fq 'Flutter outputs=pkg' || {
+  echo "dry-run에 macOS(pkg) 출력 계획이 표시되지 않았습니다." >&2
+  exit 1
+}
+if bash "$REPO_DIR/build.sh" --dry-run --flutter-platform macos-only "$FIXTURE" \
+  >/dev/null 2>&1; then
+  echo "잘못된 --flutter-platform 값을 허용했습니다." >&2
+  exit 1
+fi
+
+# 어댑터가 생태계별 안전한 기본 명령을 선택하는지 외부 빌드 없이 검증한다.
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "$UBS_TEST_LOG"' \
+  > "$FIXTURE/apps/android-app/gradlew"
+chmod +x "$FIXTURE/apps/android-app/gradlew"
+UBS_PROJECT_TYPE=android UBS_TEST_LOG="$FIXTURE/gradle.log" \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/android-app" "$REPO_DIR/scripts/build-gradle.sh"
+grep -Fqx 'bundleRelease' "$FIXTURE/gradle.log" || {
+  echo "Android 기본 Gradle task가 bundleRelease가 아닙니다." >&2
+  exit 1
+}
+
+mkdir -p "$FIXTURE/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/npm"
+printf '%s\n' '{}' > "$FIXTURE/apps/web/package-lock.json"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/node.log" \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/web" "$REPO_DIR/scripts/build-node.sh"
+grep -Fqx 'ci --no-fund --no-audit' "$FIXTURE/node.log" || {
+  echo "npm lock 파일에서 npm ci를 선택하지 않았습니다." >&2
+  exit 1
+}
+grep -Fqx 'run build' "$FIXTURE/node.log" || {
+  echo "Node build script를 실행하지 않았습니다." >&2
+  exit 1
+}
+
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "${UBS_TEST_FAIL:-false}" = true ] && [ "$1 $2" = "build appbundle" ]; then exit 7; fi' \
+  > "$FIXTURE/bin/flutter"
+chmod +x "$FIXTURE/bin/flutter"
+printf '%s\n' '# build-time public configuration only' > "$FIXTURE/apps/mobile/.env"
+
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=patch UBS_FLUTTER_PLATFORM=android \
+  UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fqx 'version: 1.0.1+2' "$FIXTURE/apps/mobile/pubspec.yaml" || {
+  echo "성공한 Flutter 빌드의 버전 변경이 유지되지 않았습니다." >&2
+  exit 1
+}
+
+: > "$FIXTURE/flutter-outputs.log"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-outputs.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_FLUTTER_OUTPUTS=appbundle,apk,web \
+  UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fq 'build appbundle --release' "$FIXTURE/flutter-outputs.log" || {
+  echo "Flutter 다중 출력에서 AAB가 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq 'build apk --release' "$FIXTURE/flutter-outputs.log" || {
+  echo "Flutter 다중 출력에서 APK가 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- '--split-per-abi' "$FIXTURE/flutter-outputs.log" || {
+  echo "Flutter APK에 ABI 분할이 적용되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq 'build web --release' "$FIXTURE/flutter-outputs.log" || {
+  echo "Flutter 다중 출력에서 Web이 실행되지 않았습니다." >&2
+  exit 1
+}
+
+: > "$FIXTURE/flutter-ipa.log"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-ipa.log" \
+  UBS_RUNTIME_ROOT="$REPO_DIR" UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none \
+  UBS_FLUTTER_OUTPUTS=ipa UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fq -- "--export-options-plist=$REPO_DIR/templates/flutter/ExportOptions.plist" \
+  "$FIXTURE/flutter-ipa.log" || {
+  echo "앱 전용 plist가 없을 때 UBS Flutter 템플릿을 사용하지 않았습니다." >&2
+  exit 1
+}
+
+# macOS PKG: flutter build macos에는 flutter build ipa 같은 단일 archive+export
+# 명령이 없어 xcodebuild를 직접 호출한다 — flutter뿐 아니라 xcodebuild도 스텁해서
+# 두 단계(archive, exportArchive) 순서와 인자를 검증한다.
+mkdir -p "$FIXTURE/apps/mobile/macos/Runner.xcworkspace"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  > "$FIXTURE/bin/xcodebuild"
+chmod +x "$FIXTURE/bin/xcodebuild"
+
+: > "$FIXTURE/flutter-pkg.log"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-pkg.log" \
+  UBS_RUNTIME_ROOT="$REPO_DIR" UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none \
+  UBS_FLUTTER_OUTPUTS=pkg UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh"
+grep -Fq 'build macos --release' "$FIXTURE/flutter-pkg.log" || {
+  echo "macOS PKG 빌드에서 flutter build macos가 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- '-workspace macos/Runner.xcworkspace -scheme Runner -configuration Release -archivePath build/macos/Runner.xcarchive archive' \
+  "$FIXTURE/flutter-pkg.log" || {
+  echo "macOS PKG 빌드에서 xcodebuild archive가 올바르게 실행되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- "-exportArchive -archivePath build/macos/Runner.xcarchive -exportPath build/macos/export -exportOptionsPlist $REPO_DIR/templates/flutter/ExportOptions-macos.plist" \
+  "$FIXTURE/flutter-pkg.log" || {
+  echo "앱 전용 macOS plist가 없을 때 UBS macOS 템플릿을 사용하지 않았습니다." >&2
+  exit 1
+}
+rm -rf "$FIXTURE/apps/mobile/macos"
+
+printf '%s\n' 'version: 1.0.0+1' 'dependencies:' '  flutter:' '    sdk: flutter' \
+  > "$FIXTURE/apps/mobile/pubspec.yaml"
+rm -f "$FIXTURE/apps/mobile/.env"
+if PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/flutter-fail.log" UBS_TEST_FAIL=true \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=patch UBS_FLUTTER_PLATFORM=android \
+  UBS_SKIP_CLEAN=true UBS_NO_NOTIFY=true bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/mobile" "$REPO_DIR/scripts/build-flutter.sh" >/dev/null 2>&1; then
+  echo "실패하도록 구성한 Flutter 빌드가 성공했습니다." >&2
+  exit 1
+fi
+grep -Fqx 'version: 1.0.0+1' "$FIXTURE/apps/mobile/pubspec.yaml" || {
+  echo "실패한 Flutter 빌드에서 원래 버전이 복원되지 않았습니다." >&2
+  exit 1
+}
+
+# Linux/Windows 계열에서는 기본 Tauri 번들을 허용하고 Apple 서명만 제한한다.
+printf '%s\n' '#!/usr/bin/env bash' 'echo Linux' > "$FIXTURE/bin/uname"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "$1 $2" = "run tauri" ]; then mkdir -p "src-tauri/target/release/bundle/deb"; : > "src-tauri/target/release/bundle/deb/Desktop.deb"; fi' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/uname" "$FIXTURE/bin/npm"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-linux.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri.sh"
+[ -f "$FIXTURE/apps/desktop/src-tauri/target/release/bundle/deb/Desktop.deb" ] || {
+  echo "Linux Tauri 기본 번들이 유지되지 않았습니다." >&2
+  exit 1
+}
+
+# macOS 전용 Apple 서명과 .pkg 분기를 운영체제와 무관하게 검증한다.
+printf '%s\n' '#!/usr/bin/env bash' 'echo Darwin' > "$FIXTURE/bin/uname"
+chmod +x "$FIXTURE/bin/uname"
+
+printf '%s\n' \
+  'TAURI_SIGN_IDENTITY="$(touch should-not-exist)"' \
+  'TAURI_INSTALLER_IDENTITY="Installer"' \
+  > "$FIXTURE/apps/desktop/.env.macos"
+if PATH="$FIXTURE/bin:$PATH" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
+  TAURI_UNIVERSAL_MACOS=false \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh" >/dev/null 2>&1; then
+  echo "서명 파일이 없는 Tauri 테스트가 성공했습니다." >&2
+  exit 1
+fi
+[ ! -e "$FIXTURE/apps/desktop/should-not-exist" ] || {
+  echo ".env.macos 내용이 셸 명령으로 실행됐습니다." >&2
+  exit 1
+}
+
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "$1 $2" = "run tauri" ]; then mkdir -p "src-tauri/target/release/bundle/macos/Desktop.app/Contents"; fi' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/npm"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true TAURI_UNIVERSAL_MACOS=false \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
+[ -d "$FIXTURE/apps/desktop/src-tauri/target/release/bundle/macos/Desktop.app" ] || {
+  echo "서명 설정이 없는 Tauri 자동 모드에서 .app이 유지되지 않았습니다." >&2
+  exit 1
+}
+[ ! -e "$FIXTURE/apps/desktop/should-not-exist" ] || {
+  echo "Tauri 자동 모드에서 .env.macos 내용이 실행됐습니다." >&2
+  exit 1
+}
+
+mkdir -p "$FIXTURE/apps/desktop/signing"
+printf '%s\n' 'profile' > "$FIXTURE/apps/desktop/signing/App.provisionprofile"
+printf '%s\n' '<plist />' > "$FIXTURE/apps/desktop/signing/app.entitlements"
+printf '%s\n' \
+  'TAURI_SIGN_IDENTITY="Apple Distribution: Test"' \
+  'TAURI_INSTALLER_IDENTITY="Installer: Test"' \
+  'TAURI_PROVISION_PROFILE=signing/App.provisionprofile' \
+  'TAURI_ENTITLEMENTS=signing/app.entitlements' \
+  > "$FIXTURE/apps/desktop/.env.macos"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "xattr %s\n" "$*" >> "$UBS_TEST_LOG"' \
+  > "$FIXTURE/bin/xattr"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "codesign %s\n" "$*" >> "$UBS_TEST_LOG"' \
+  > "$FIXTURE/bin/codesign"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "productbuild %s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'for value in "$@"; do output="$value"; done' \
+  'mkdir -p "$(dirname "$output")"' ': > "$output"' \
+  > "$FIXTURE/bin/productbuild"
+chmod +x "$FIXTURE/bin/xattr" "$FIXTURE/bin/codesign" "$FIXTURE/bin/productbuild"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-signed.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=signed \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true TAURI_UNIVERSAL_MACOS=false \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
+[ -f "$FIXTURE/apps/desktop/signing/build/Desktop.pkg" ] || {
+  echo "Tauri signed 모드에서 .pkg가 생성되지 않았습니다." >&2
+  exit 1
+}
+grep -Fq 'xattr -cr signing/App.provisionprofile' "$FIXTURE/tauri-signed.log" || {
+  echo "Tauri signed 모드에서 quarantine 속성 제거가 실행되지 않았습니다." >&2
+  exit 1
+}
+
+# macOS 유니버설 빌드(TAURI_UNIVERSAL_MACOS 기본 on)는 --target universal-apple-darwin으로
+# 빌드하고 target/<triple>/release 아래에서 산출물을 찾아야 한다.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'case "$1 $2" in' \
+  '  "target list") printf "aarch64-apple-darwin (installed)\nx86_64-apple-darwin (installed)\n" ;;' \
+  '  *) exit 0 ;;' \
+  'esac' \
+  > "$FIXTURE/bin/rustup"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$UBS_TEST_LOG"' \
+  'if [ "$1 $2" = "run tauri" ]; then' \
+  '  bundle_dir="src-tauri/target/release/bundle/macos"' \
+  '  prev=""' \
+  '  for value in "$@"; do' \
+  '    [ "$prev" != "--target" ] || bundle_dir="src-tauri/target/$value/release/bundle/macos"' \
+  '    prev="$value"' \
+  '  done' \
+  '  mkdir -p "$bundle_dir/Desktop.app/Contents"' \
+  'fi' \
+  > "$FIXTURE/bin/npm"
+chmod +x "$FIXTURE/bin/rustup" "$FIXTURE/bin/npm"
+PATH="$FIXTURE/bin:$PATH" UBS_TEST_LOG="$FIXTURE/tauri-universal.log" \
+  UBS_NON_INTERACTIVE=true UBS_VERSION_BUMP=none UBS_TAURI_PACKAGE_MODE=auto \
+  UBS_SKIP_INSTALL=true UBS_NO_NOTIFY=true \
+  bash -c 'cd "$1" && bash "$2"' _ \
+  "$FIXTURE/apps/desktop" "$REPO_DIR/scripts/build-tauri-macos.sh"
+[ -d "$FIXTURE/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Desktop.app" ] || {
+  echo "macOS 유니버설 빌드가 target/<triple>/release 아래에 산출물을 만들지 않았습니다." >&2
+  exit 1
+}
+grep -Fq -- '--target universal-apple-darwin' "$FIXTURE/tauri-universal.log" || {
+  echo "macOS 유니버설 빌드가 tauri build에 --target을 전달하지 않았습니다." >&2
+  exit 1
+}
+
+echo "감지 테스트 통과 (6 projects)"

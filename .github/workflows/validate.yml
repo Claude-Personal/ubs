@@ -1,0 +1,176 @@
+name: Validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-and-skill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.9"
+
+      - name: Validate Bash syntax
+        run: bash -n build.sh install.sh scripts/*.sh scripts/lib/*.sh tests/*.sh
+
+      - name: Validate Python core
+        run: python -m py_compile scripts/ubs.py scripts/ubs_mcp.py scripts/i18n.py scripts/i18n_messages.py tests/test_python_core.py tests/test_mcp.py tests/test_i18n_detect_lang.py
+
+      - name: Validate i18n catalog integrity
+        run: |
+          # bash catalog: no duplicate UBS_MSG_<lang>_<KEY> definitions (the
+          # file is sourced top-to-bottom as plain variable assignments, so a
+          # duplicate silently wins over the earlier one instead of erroring)
+          dupes="$(grep -ohE '^UBS_MSG_[a-z]+_[A-Z0-9_]+=' scripts/lib/i18n_messages.sh | sort | uniq -d)"
+          if [ -n "$dupes" ]; then
+            echo "Duplicate catalog keys in scripts/lib/i18n_messages.sh:" >&2
+            echo "$dupes" >&2
+            exit 1
+          fi
+          # python catalog: no duplicate top-level MESSAGES keys
+          python -c "
+          import re
+          src = open('scripts/i18n_messages.py').read()
+          keys = re.findall(r'^    \"([A-Z0-9_]+)\":', src, re.M)
+          dupes = sorted({k for k in keys if keys.count(k) > 1})
+          if dupes:
+              raise SystemExit(f'Duplicate catalog keys in scripts/i18n_messages.py: {dupes}')
+          "
+
+      - name: Run behavior tests
+        run: |
+          python tests/test_python_core.py
+          python tests/test_mcp.py
+          python tests/test_i18n_detect_lang.py
+          bash tests/test-detection.sh
+          bash tests/test-install.sh
+          bash tests/test-python-adapters.sh
+          bash tests/test-update.sh
+          bash tests/test-i18n.sh
+          bash tests/test-i18n-placeholders.sh
+          bash tests/test-i18n-detect-lang.sh
+
+      - name: Validate Rust helper
+        run: bash tests/test-rust-helper.sh
+
+      - name: Validate Rust helper crate
+        run: |
+          cd native/ubs-helper
+          cargo fmt --all -- --check
+          cargo test --all-targets
+
+      - name: Validate update manifest
+        run: |
+          scripts/generate-update-manifest.sh > /tmp/update-manifest.txt
+          diff -u scripts/update-manifest.txt /tmp/update-manifest.txt
+
+      - name: Validate update manifest signature
+        run: |
+          # CI에는 서명 개인키가 없다(의도적 — 있으면 계정 탈취 시 같이 털림).
+          # 여기서는 커밋된 서명이 커밋된 manifest·공개키와 실제로 맞는지만 검증한다.
+          INSTALL_KEY="$(sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' install.sh |
+            sed 's/.*-----BEGIN/-----BEGIN/')"
+          UPDATE_KEY="$(sed -n '/-----BEGIN PUBLIC KEY-----/,/-----END PUBLIC KEY-----/p' scripts/lib/update.sh |
+            sed "s/^UBS_UPDATE_MANIFEST_PUBLIC_KEY='//; s/'\$//")"
+          if [ "$INSTALL_KEY" != "$UPDATE_KEY" ]; then
+            echo "install.sh와 scripts/lib/update.sh에 박힌 공개키가 서로 다릅니다." >&2
+            exit 1
+          fi
+          echo "$INSTALL_KEY" > /tmp/manifest-pubkey.pem
+          openssl dgst -sha256 -verify /tmp/manifest-pubkey.pem \
+            -signature scripts/update-manifest.txt.sig scripts/update-manifest.txt
+
+      - name: Validate Flutter export template
+        run: python -c 'import plistlib; plistlib.load(open("templates/flutter/ExportOptions.plist", "rb"))'
+
+      - name: Validate privacy ignores
+        run: |
+          for path in \
+            .env .env.macos signing/App.provisionprofile signing/app.entitlements \
+            build/app.aab dist/app.js src-tauri/target/release/app; do
+            git check-ignore -q "$path"
+          done
+          if git check-ignore -q .env.example || git check-ignore -q .env.macos.example; then
+            echo "Environment example files must remain trackable" >&2
+            exit 1
+          fi
+
+      - name: Validate documentation and diagrams
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("README.md").read_text(encoding="utf-8")
+          assert text.strip(), "README.md is empty"
+          assert text.count("```mermaid") >= 3, "README.md needs at least three diagrams"
+          assert text.count("```") % 2 == 0, "unbalanced code fences in README.md"
+          for required in (
+              "UBS_JOBS", "UBS_INSTALL_MODE", "UBS_MANAGE_GITIGNORE",
+              "UBS_GRADLE_FLAGS", "UBS_LANG", "graph --json",
+              "ubs.dependencies.json", "ios-xcode", "scripts/ubs_mcp.py",
+              "UBS_MCP_ROOT",
+          ):
+              assert required in text, f"README.md is missing current feature reference {required}"
+          assert "Copyright (c) 2026 kimdzhekhon" in Path("LICENSE").read_text(encoding="utf-8")
+          print("README and Mermaid diagrams are valid")
+          PY
+
+      - name: Validate AI skill metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          skill_text = Path("skills/universal-build/SKILL.md").read_text(encoding="utf-8")
+          _, frontmatter, body = skill_text.split("---", 2)
+          interface = Path("skills/universal-build/agents/openai.yaml").read_text(encoding="utf-8")
+
+          assert re.search(r"(?m)^name:\s*universal-build\s*$", frontmatter)
+          assert re.search(r"(?m)^description:\s*\S", frontmatter)
+          assert body.strip()
+          assert 'display_name: "Universal Build"' in interface
+          assert "$universal-build" in interface
+          print("AI skill metadata is valid")
+          PY
+
+  python-core-cross-platform:
+    name: python-core (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Validate Python core behavior
+        run: python tests/test_python_core.py

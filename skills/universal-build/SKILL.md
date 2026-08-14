@@ -1,0 +1,96 @@
+---
+name: universal-build
+description: Detect, graph, audit, plan, update, and run release builds across Flutter, Tauri, Xcode iOS, Android, Kotlin, Gradle, React, Next.js, and Node workspaces that contain the Universal Build Script. Use when an AI agent must inspect buildable projects and dependencies, assess optimization or obfuscation coverage, select release outputs, check or apply managed runtime updates, dry-run a monorepo build, or execute ./build.sh safely.
+---
+
+# Universal Build
+
+Use the repository's `build.sh` as the single source of truth. It is a stable Bash entry point backed by the Python orchestration core; do not invoke `scripts/ubs.py` directly or reimplement ecosystem detection inside the agent. Python owns dependency graphs, topological scheduling, workspace-aware Node/Gradle execution, Xcode builds, and resolved plans while Bash remains for Flutter/Tauri platform work. Treat JSON output as the machine contract. The optional Rust helper batch-verifies updates and is not a prerequisite for normal builds.
+
+## Locate the Build Root
+
+Find the nearest workspace directory containing `build.sh`. If `scripts/ubs.py` is also present, run commands from that directory. If `build.sh` exists but the Python core does not, inspect `VERSION`: a 2.x installation needs the documented one-time `UBS_FORCE=true` 3.x installer migration. If `build.sh` is absent, explain that Universal Build Script is not installed instead of guessing build commands. `scripts/lib/detect.sh`, `scripts/lib/audit.sh`, `scripts/build-node.sh`, and `scripts/build-gradle.sh` remain only as compatibility wrappers or regression-test surfaces.
+
+## Follow the Safe Workflow
+
+1. Inspect without mutation:
+
+   ```bash
+   ./build.sh detect --json .
+   ./build.sh audit --json .
+   ./build.sh plan --json .
+   ./build.sh graph --json .
+   ```
+
+2. Summarize detected projects, planned adapters, requested artifacts, and audit gaps. Read [references/optimization.md](references/optimization.md) before interpreting optimization or obfuscation results.
+3. Run a real build only when the user requested a build or release. Keep versions unchanged unless the user explicitly requested a bump:
+
+   ```bash
+   UBS_OPEN_OUTPUT=false UBS_NO_NOTIFY=true ./build.sh --version-bump none --report-json .ubs/build-report.json .
+   ```
+
+4. Read the generated build report and report successes, failures, and artifact paths. Preserve full failing command output when diagnosing.
+
+Normal interactive local builds use `UBS_OPEN_OUTPUT=auto` and reveal successful artifact folders after every selected project has finished. Agent, MCP, CI, and redirected runs should explicitly set `UBS_OPEN_OUTPUT=false`; use `true` only when the user asked to open a desktop file manager. Folder opening is best effort and does not change a successful build status.
+
+On its first build in a project, `build.sh` asks a human at a real terminal whether to default to unattended or interactive builds and remembers the answer in `.ubs/config.json`. Agent/MCP/CI runs are never prompted (no TTY), so no extra flag is required; pass `--non-interactive` explicitly only if you want to be certain regardless of environment.
+
+Do not silently add signing, notarization, or deployment. A signed Tauri package requires the repository's signing configuration; report missing prerequisites rather than fabricating them.
+
+`./build.sh publish [--project PATH] [--track TRACK]` uploads already-built store artifacts (`.ipa`/`.pkg` via App Store Connect `altool`, `.aab` via the Google Play Developer API) — it does not rebuild. Never run `publish`, pass `--publish`, or otherwise trigger an upload unless the user explicitly asked to publish/submit/upload this build; a request to "build" or "release" a local artifact is not that request. On its first Tauri/publishable build in a project, `build.sh` asks a human at a real terminal whether plain builds should offer a post-build publish prompt (`.ubs/config.json`, same TTY-gated pattern as the other first-run questions) — agent/MCP/CI runs are never prompted and never auto-publish regardless of any saved local default. Required credentials (`ASC_API_KEY_ID`/`ASC_API_ISSUER_ID`/`ASC_APPLE_ID`/`ASC_BUNDLE_ID` for Apple, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`/`GOOGLE_PLAY_PACKAGE_NAME` for Google) must already be configured by the user; report missing credentials rather than fabricating them. `GOOGLE_PLAY_TRACK` defaults to `internal` — never target `production` unless the user explicitly said so.
+
+Tauri frontend JS obfuscation defaults off. On the first Tauri build in a project, `build.sh` asks a human at a real terminal whether to default obfuscation on and remembers the answer alongside the interactive-vs-unattended choice in `.ubs/config.json`. Agent/MCP/CI runs are never prompted; pass `--obfuscate-js` or `--no-obfuscate-js` explicitly only when the user asked for a specific behavior regardless of the saved default, since obfuscation can increase bundle size or break runtime behavior.
+
+Tauri macOS builds default to a universal binary (Apple Silicon + Intel, one `.app` via `--target universal-apple-darwin`) when `rustup` is available; set `TAURI_UNIVERSAL_MACOS=false` for a faster host-arch-only build. The artifact then lives under `src-tauri/target/universal-apple-darwin/release/bundle/...` instead of `src-tauri/target/release/bundle/...` — read the printed `Artifact` path rather than assuming the default location.
+
+## Update the Managed Runtime
+
+Keep updates separate from builds. Never update merely because the user requested a build. When the user asks to update Universal Build, inspect first:
+
+```bash
+./build.sh update --check
+./build.sh update --dry-run
+./build.sh update --check --json
+```
+
+Summarize the local and remote versions, changed managed files, and backup behavior. Run `./build.sh update` only after explicit user authorization. Do not override project source, environment files, signing material, or a project's generated `ios/ExportOptions.plist`. Report the `.ubs/backups/` path after a successful update. Prune backups only when the user requests a retention policy, for example `./build.sh update --prune-backups 30`.
+
+## Select Outputs
+
+Use an explicit Flutter output list when the requested deliverables are known:
+
+```bash
+./build.sh --flutter-outputs appbundle,apk,ipa,web,pkg --version-bump none .
+```
+
+Available values are `appbundle`, `apk`, `ipa`, `web`, and `pkg` (macOS App Store package, macOS host only). An explicit list overrides platform auto-selection. Use `--flutter-platform auto|all|ios|android|macos` only with the default `--flutter-outputs auto` behavior — `auto`/`all` never include `macos` on their own, it must be selected explicitly since it needs its own signing setup (`macos/ExportOptions.plist`).
+
+Use environment overrides for non-Flutter adapters only when the project requires them:
+
+```bash
+UBS_GRADLE_TASK=assembleRelease ./build.sh .
+UBS_NODE_BUILD_SCRIPT=build:production ./build.sh .
+UBS_TAURI_PACKAGE_MODE=signed ./build.sh .
+UBS_XCODE_SCHEME=MyApp UBS_XCODE_EXPORT=true ./build.sh .
+```
+
+Prefer `--project PATH` for one target (its detected prerequisites are included) and `--all --type TYPE` for filtered monorepo builds. Use `--fail-fast` only when later independent projects should not continue after a failure.
+
+`--jobs N` runs only independent projects in the same topological layer and automatically serializes ancestor/descendant paths and projects sharing a Node workspace. Review `graph --json`; record dependencies outside Node package names, Flutter paths, and Gradle composites in `ubs.dependencies.json`. Keep the default of one worker when separate workspaces share signing state or implicit external outputs. Node dependency installation is cached from workspace locks, configuration, patches, manager/runtime versions, and package manifests; use `UBS_INSTALL_MODE=always` when a clean reinstall is required.
+
+The installer stages and verifies the full immutable release before applying one transaction. Use `UBS_INSTALL_REF` only for an immutable reviewed tag or commit, never an arbitrary moving branch.
+
+## Interpret Claims Carefully
+
+Treat `audit` as a static configuration review, not binary analysis. Never claim that every artifact is obfuscated merely because a production or minified build ran. Distinguish these concepts:
+
+- optimization: release compilation, minification, tree shaking, resource shrinking, LTO, or stripping;
+- obfuscation: deliberate transformation of names or control structure;
+- symbol separation: debug information is stored separately and must be retained for crash symbolication;
+- signing: proves publisher identity and integrity but does not optimize or obfuscate.
+
+Verify actual artifacts and logs after a real build. For high-assurance release review, recommend ecosystem-specific artifact inspection in addition to this static audit.
+
+## MCP Integration Contract
+
+Prefer the bundled `scripts/ubs_mcp.py` stdio server. Set `UBS_MCP_ROOT` to the allowed workspace. Its default tools are `ubs_detect`, `ubs_audit`, `ubs_plan`, `ubs_graph`, and `ubs_update_check`. It hides `ubs_build` unless the server starts with `UBS_MCP_ALLOW_BUILD=true`, and non-dry-run builds require `confirm=true`. Do not replace these controls with an arbitrary shell tool or pass signing secrets through free-form arguments.

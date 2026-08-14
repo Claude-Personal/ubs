@@ -1,0 +1,38 @@
+name: Attest release artifacts
+
+# 최초 curl|bash 설치는 installer(install.sh)·공개키·manifest·payload가 전부 같은
+# GitHub 저장소 채널에서 온다 — 즉 저장소 자체가 유일한 신뢰점이다(README "최초 설치와
+# 이후 업데이트의 신뢰 루트는 다릅니다" 참고). 이 워크플로는 그 문제를 GitHub Artifact
+# Attestation(Sigstore 기반, GitHub Actions OIDC로 keyless 서명, 공개 Rekor transparency
+# log에 기록)으로 보강한다. 신뢰 기준이 "저장소에 push할 수 있는 사람"에서 "GitHub Actions
+# OIDC 발급자(Fulcio)"로 바뀌므로, 저장소/계정만 탈취해서는 위조 attestation을 만들 수 없다
+# (별도로 GitHub의 OIDC 토큰 발급 파이프라인 자체를 침해해야 한다).
+#
+# 검증: gh attestation verify install.sh --owner Claude-Personal
+# (gh CLI 2.49+ 내장 명령, 별도 cosign 설치 불필요)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Attest install.sh and update.sh
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            install.sh
+            scripts/lib/update.sh
+            scripts/update-manifest.txt
