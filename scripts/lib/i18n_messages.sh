@@ -333,7 +333,7 @@ UBS_MSG_ja_UPDATE_BACKUP_SYMLINK_SKIP="シンボリックリンクのバック�
 UBS_MSG_zh_UPDATE_BACKUP_SYMLINK_SKIP="跳过对符号链接备份路径的清理: %s"
 
 UBS_MSG_ko_UPDATE_BACKUP_PRUNED="백업 정리 완료: %s일 초과 디렉터리 %s개 삭제"
-UBS_MSG_en_UPDATE_BACKUP_PRUNED="Backup cleanup complete: deleted %s director(y/ies) older than %s day(s)"
+UBS_MSG_en_UPDATE_BACKUP_PRUNED="Backup cleanup complete: deleted %s day(s)-old director(y/ies): %s removed"
 UBS_MSG_ja_UPDATE_BACKUP_PRUNED="バックアップ整理完了: %s日を超えたディレクトリを%s個削除しました"
 UBS_MSG_zh_UPDATE_BACKUP_PRUNED="备份清理完成: 已删除超过 %s 天的目录 %s 个"
 
