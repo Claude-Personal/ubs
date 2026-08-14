@@ -6,6 +6,9 @@
 #   1. scripts/generate-update-manifest.sh > scripts/update-manifest.txt
 #   2. scripts/sign-update-manifest.sh
 #   3. scripts/update-manifest.txt / .sig 커밋 + 태그
+#
+# 릴리스 담당자 로컬 전용 스크립트라 다른 어댑터와 달리 lib/i18n.sh를 쓰지 않고
+# 메시지를 한글로 직접 적는다 — 최종 사용자에게 노출되지 않으므로 의도적 예외.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
