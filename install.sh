@@ -550,7 +550,7 @@ def main() -> None:
         signing = destination_for("signing/.keep").parent
         signing.mkdir(parents=True, exist_ok=True)
 
-    if os.environ.get("UBS_BUILD_RUST_HELPER", "false") == "true":
+    if "tauri" in kinds and os.environ.get("UBS_BUILD_RUST_HELPER", "false") == "true":
         import subprocess
         subprocess.run(["bash", "scripts/build-rust-helper.sh"], check=True)
 
